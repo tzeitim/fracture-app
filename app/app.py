@@ -72,21 +72,24 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         attrs = graph.nodes[node]
         
         # Handle label with improved formatting
+        #n0 [label="ID: 0\nSeq: GACGCGACTGTACGCTCACGACGACGGAGTCG\ncov: 43" style=filled fillcolor="#4895fa30"]
         label = attrs.get('label', node)
         if label and isinstance(label, str):
             label = label.strip('"')
-            # Extract just the ID for node labels
+            # Extract justrthe ID for node labels
             if 'ID:' in label:
                 id_part = label.split('\\n')[0].replace('ID: ', '')
-                label = f"Node {id_part}"
-        node_labels.append(label)
+                seq_part = label.split('\\n')[1].replace('Seq: ', '')
+                cov_part = label.split('\\n')[2].replace('Seq: ', '')
+                label = f"Node {id_part} {seq_part} {cov_part}"
+        node_labels.append("")
         
         # Create detailed hover text
-        if isinstance(label, str) and 'ID:' in label:
+        if isinstance(label, str) and 'Node' in label:
             hover_text = label.replace('\\n', '<br>')
-            hover_texts.append(f"<b>{hover_text}</b>")
+            hover_texts.append(f"<b>{seq_part} {cov_part}</b>")
         else:
-            hover_texts.append(f"<b>Node: {node}</b>")
+            hover_texts.append(f"")
         
         fillcolor = attrs.get('fillcolor', '#375a7f' if dark_mode else '#1f77b4')
         node_colors.append(clean_color(fillcolor))
@@ -303,7 +306,56 @@ app_ui = ui.page_fluid(
                     "assemble",
                     "Assemble Contig",
                     class_="btn-primary"
-                )
+                ),
+                ui.hr(),  # Add a visual separator
+                ui.hr(),  # Add a visual separator
+                ui.hr(),  # Add a visual separator
+                ui.h4("Parameter Sweep"),
+                ui.input_slider(
+                    "k_start",
+                    "K-mer Range Start",
+                    min=1,
+                    max=20,
+                    value=1,
+                    step=1
+                ),
+
+                ui.input_slider(
+                    "k_end",
+                    "K-mer Range End",
+                    min=21,
+                    max=150,
+                    value=75,
+                    step=1
+                ),
+                ui.input_slider(
+                    "cov_start",
+                    "Coverage Range Start",
+                    min=1,
+                    max=17,
+                    value=1
+                ),
+                ui.input_slider(
+                    "cov_end",
+                    "Coverage Range End",
+                    min=250,
+                    max=500,
+                    value=100
+                ),
+                ui.input_slider(
+                    "k_step",
+                    "K-mer step",
+                    min=1,
+                    max=20,
+                    value=1,
+                    step=1
+                ),
+                #--
+                ui.input_action_button(
+                    "run_sweep",
+                    "Run Parameter Sweep",
+                    class_="btn-primary"
+                ),
             ),
             width=500,
         ),
@@ -344,7 +396,7 @@ app_ui = ui.page_fluid(
                     ui.column(6,
                         ui.panel_well(
                             ui.h4("Assembly Statistics"),
-                            ui.output_text("assembly_stats")
+                            ui.pre(ui.output_text("assembly_stats"))
                         )
                     ),
                     ui.column(6,
@@ -356,7 +408,7 @@ app_ui = ui.page_fluid(
                     )
                 ),
             ui.row(
-                ui.column(12,
+                ui.column(3,
                     ui.panel_well(
                         ui.h4("Graph Visualization Options"),
                         ui.input_select(
@@ -379,19 +431,22 @@ app_ui = ui.page_fluid(
                             },
                             selected="linear"
                         ),
-                        ui.h4("Assembly Graph"),
-                        output_widget("assembly_graph")
                     )
                 )
             ),
+                         ui.row(
+                        ui.h4("Assembly Graph"),
+                        output_widget("assembly_graph")
+
+                             ),
 
             ),
             ui.nav_panel("Parameter Sweep",
                 ui.row(
-                    ui.column(12,
+                    ui.column(6,
                         ui.panel_well(
                             ui.h4("K-mer vs Coverage Sweep"),
-                            ui.output_plot("sweep_heatmap")
+                            output_widget("sweep_heatmap")
                         )
                     )
                 )
@@ -597,15 +652,13 @@ def server(input, output, session):
             return "No assembly results available"
             
         read_count = data().filter(pl.col('umi') == input.umi()).height
-        
-        return f"""
-        Assembly Statistics:
-        - Contig Length: {len(assembly_result())}
-        - Input Reads: {read_count}
-        - Selected UMI: {input.umi()}
-        - K-mer Size: {input.kmer_size()}
-        - Min Coverage: {input.min_coverage()}
-        """
+        return f"""Assembly Statistics
+        Contig Length: {len(assembly_result())}
+        Input Reads: {read_count}
+        Selected UMI: {input.umi()}
+        K-mer Size: {input.kmer_size()}
+        Min Coverage: {input.min_coverage()}"""
+
 
     @output
     @render.text
@@ -623,26 +676,96 @@ def server(input, output, session):
         return assembly_result()
 
 
+    # Add to existing server function:
+
+    @reactive.Effect
+    @reactive.event(input.run_sweep)
+    def run_parameter_sweep():
+        try:
+            if data() is None or not input.umi():
+                ui.notification_show(
+                    "Please load data and select a UMI first",
+                    type="warning"
+                )
+                return
+                
+            df = data()
+            filtered_df = df.filter(pl.col('umi') == input.umi())
+            
+            ui.notification_show(
+                "Running parameter sweep...",
+                type="message"
+            )
+            
+            # Run sweep using the API
+            result = (
+                filtered_df
+                .pp.assemble_sweep_params_umi(
+                    target_umi=input.umi(),
+                    k_start=input.k_start(),
+                    k_end=input.k_end(),
+                    k_step=input.k_step(),
+                    cov_start=input.cov_start(),
+                    cov_end=input.cov_end(),
+                    cov_step=5,
+                    export_graphs=False,
+                    intbc_5prime='GAGACTGCATGG',
+                    prefix=input.umi()
+                )
+                .drop('umi')
+                .pivot(index='k', on='min_coverage', values='contig_length')
+            )
+
+            #result.write_parquet(f'{input.umi()}_sweep.parquet')
+            result = result.to_pandas().set_index('k')
+            
+            sweep_results.set(result)
+            
+            ui.notification_show(
+                "Parameter sweep completed!",
+                type="message"
+            )
+            
+        except Exception as e:
+            ui.notification_show(
+                f"Error during parameter sweep: {str(e)}",
+                type="error"
+            )
+            print(f"Sweep error: {str(e)}")
+
     @output
     @render_plotly
     def sweep_heatmap():
-        if data() is None or not input.umi():
+        if sweep_results() is None:
             return go.Figure(layout=dark_template['layout'])
             
-        fig = go.Figure()
+        # Create heatmap using plotly express
+        fig = px.imshow(
+            sweep_results(),
+            labels=dict(
+                x="Minimum Coverage",
+                y="K-mer Size",
+                color="Contig Length"
+            ),
+            title="K-mer Size vs Coverage Parameter Sweep",
+            aspect="auto",  # Maintain readability regardless of dimensions
+            color_continuous_scale="Viridis"  # Use a color scale that works well with dark theme
+        )
+        
+        # Update layout to match dark theme
         fig.update_layout(
             **dark_template['layout'],
-            annotations=[dict(
-                text="Parameter Sweep Visualization\n(To be implemented)",
-                xref="paper",
-                yref="paper",
-                x=0.5,
-                y=0.5,
-                showarrow=False,
-                font=dict(color='#ffffff', size=14)
-            )]
+            xaxis_title="Minimum Coverage",
+            yaxis_title="K-mer Size",
+            coloraxis_colorbar_title="Contig Length"
         )
+        
+        # Ensure axis labels are visible
+        fig.update_xaxes(showticklabels=True, title_standoff=25)
+        fig.update_yaxes(showticklabels=True, title_standoff=25)
+        
         return fig
+
     @output
     @render_plotly
     def assembly_graph():
