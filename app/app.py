@@ -183,8 +183,8 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
     fig.update_layout(
         showlegend=False,
         hovermode='closest',
-        height=800,  # Fixed height
-        width=1000,  # Fixed width
+        height=2000,  # Fixed height
+        width=2000,  # Fixed width
         margin=dict(b=40, l=20, r=20, t=40),  # Adjusted margins
         annotations=[
             dict(
