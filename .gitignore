@@ -1,3 +1,9 @@
+# graph files
+*__condensed.dot
+*__condensed.csv
+*__preliminary.dot
+*__preliminary.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
