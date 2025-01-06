@@ -7,12 +7,174 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from ogtk.ltr.fracture.pipeline import api_ext
-def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed'):
+
+def sync_slider_and_text(input, session, slider_id, text_id, shared_value):
+    # Update shared_value when slider changes
+    @reactive.Effect
+    @reactive.event(input[slider_id])
+    def _():
+        shared_value.set(input[slider_id]())
+        # Update text input to match slider value
+        ui.update_text(text_id, value=str(input[slider_id]()))
+
+    # Update shared_value when text input changes
+    @reactive.Effect
+    @reactive.event(input[text_id])
+    def _():
+        try:
+            # Convert text to integer and update shared_value
+            new_value = int(input[text_id]())
+            shared_value.set(new_value)
+            # Update slider to match text input value
+            ui.update_slider(slider_id, value=new_value)
+        except ValueError:
+            pass  # Ignore invalid input
+
+
+def split_and_with_spacer(s, n, spacer='<br>'):
+    return spacer.join([s[i:i+n] for i in range(0, len(s), n)])
+
+def clean_color(color, dark_mode=True):
+    """Convert color to valid plotly format, handling alpha channels."""
+    if not isinstance(color, str):
+        return '#375a7f' if dark_mode else '#1f77b4'
+        
+    color = color.strip('"')
+    
+    if len(color) == 9 and color.startswith('#'):
+        return color[:7]
+        
+    if color.startswith('rgba'):
+        try:
+            components = color.strip('rgba()').split(',')
+            r, g, b = map(int, components[:3])
+            return f'#{r:02x}{g:02x}{b:02x}'
+        except:
+            return '#375a7f' if dark_mode else '#1f77b4'
+            
+    if len(color) == 7 and color.startswith('#'):
+        return color
+        
+    return '#375a7f' if dark_mode else '#1f77b4'
+
+
+def split_and_with_spacer(s, n, spacer='<br>'):
+    """Split a string into chunks of size n with a spacer between them."""
+    return spacer.join([s[i:i+n] for i in range(0, len(s), n)]) 
+
+def highlight_sequences(text, sequence_colors):
+    """Highlight specific sequences in the hover text with proper HTML escaping."""
+    import html
+    
+    # First escape any HTML in the original text
+    escaped_text = html.escape(text)
+    result = escaped_text
+    
+    # Keep track of where we've inserted spans to avoid nested tags
+    # Each entry will be (start_pos, end_pos, html_to_insert)
+    replacements = []
+    
+    # Find all occurrences of each sequence and their positions
+    for seq, color in sequence_colors.items():
+        start = 0
+        while True:
+            pos = escaped_text.find(seq, start)
+            if pos == -1:
+                break
+            replacements.append((
+                pos, 
+                pos + len(seq), 
+                f'<span style="color: {color}">{seq}</span>'
+            ))
+            start = pos + 1
+    
+    # Sort replacements by start position in reverse order
+    replacements.sort(key=lambda x: x[0], reverse=True)
+    
+    # Apply the replacements
+    for start, end, html in replacements:
+        result = result[:start] + html + result[end:]
+    
+    return result
+
+def format_sequence_with_highlights(seq_part, sequence_colors, line_length=60):
+    """Format sequence with highlights, handling sequences that span line breaks."""
+    # First highlight the entire sequence
+    highlighted_seq = highlight_sequences(seq_part, sequence_colors)
+    
+    # Now split the highlighted sequence into lines, being careful with HTML tags
+    lines = []
+    current_line = []
+    char_count = 0
+    in_tag = False
+    tag_buffer = []
+    
+    for char in highlighted_seq:
+        if char == '<':
+            in_tag = True
+            tag_buffer.append(char)
+            continue
+            
+        if in_tag:
+            tag_buffer.append(char)
+            if char == '>':
+                in_tag = False
+                current_line.append(''.join(tag_buffer))
+                tag_buffer = []
+            continue
+        
+        current_line.append(char)
+        char_count += 1
+        
+        if char_count >= line_length:
+            lines.append(''.join(current_line))
+            current_line = []
+            char_count = 0
+    
+    if current_line:
+        lines.append(''.join(current_line))
+        
+    if tag_buffer:  # Handle any unclosed tags (shouldn't happen with valid HTML)
+        lines[-1] += ''.join(tag_buffer)
+        
+    return '<br>'.join(lines)
+
+def get_node_style(seq, sequence_colors, dark_mode):
+    """Determine node color and opacity based on sequence presence."""
+    if not seq:
+        return dict(color='rgba(0,0,0,0)', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
+    
+    # Clean up the sequence string
+    seq = seq.strip('"').strip()
+    
+    for target_seq, color in sequence_colors.items():
+        if target_seq in seq:
+            return dict(color=color, line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
+    
+    # No matching sequence found - return transparent fill with border
+    return dict(color='rgba(0,0,0,0)', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
+
+def extract_coverage(label):
+    """Extract coverage value from node label."""
+    if not label or not isinstance(label, str):
+        return None
+    import re 
+    match = re.search(r'cov:\s*(\d+)', label)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', debug=False):
     """Convert a DOT file to a Plotly figure with optimized layout settings.
+    Nodes are sized according to their coverage values and disjoint subgraphs are separated.
     
     Args:
         dot_path (str): Path to the DOT file
         dark_mode (bool): Whether to use dark theme colors
+        line_shape (str): Shape of edges ('linear' or 'spline')
+        graph_type (str): Type of graph visualization
+        debug (bool): Whether to print debug information
         
     Returns:
         go.Figure: Plotly figure object
@@ -20,29 +182,9 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
     import networkx as nx
     from graphviz import Source
     import plotly.graph_objects as go
-    
-    def clean_color(color):
-        """Convert color to valid plotly format, handling alpha channels."""
-        if not isinstance(color, str):
-            return '#375a7f' if dark_mode else '#1f77b4'
-            
-        color = color.strip('"')
-        
-        if len(color) == 9 and color.startswith('#'):
-            return color[:7]
-            
-        if color.startswith('rgba'):
-            try:
-                components = color.strip('rgba()').split(',')
-                r, g, b = map(int, components[:3])
-                return f'#{r:02x}{g:02x}{b:02x}'
-            except:
-                return '#375a7f' if dark_mode else '#1f77b4'
-                
-        if len(color) == 7 and color.startswith('#'):
-            return color
-            
-        return '#375a7f' if dark_mode else '#1f77b4'
+    import re
+    import html
+    from collections import defaultdict
     
     # Read and parse DOT file
     try:
@@ -51,18 +193,76 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         print(f"Error reading DOT file: {e}")
         return None
 
-    # Convert to undirected for layout calculation
-    graph_undirected = graph.to_undirected()
+    # Find connected components (disjoint subgraphs)
+    components = list(nx.connected_components(graph.to_undirected()))
     
-    # Calculate layout using Kamada-Kawai with adjusted scale
-    pos = nx.kamada_kawai_layout(graph_undirected, scale=2.0)
+    # Calculate layout for each component separately and then adjust positions
+    all_pos = {}
+    component_centers = []
+    spacing = 3.0  # Increase spacing between components
+    
+    for i, component in enumerate(components):
+        # Create subgraph for this component
+        subgraph = graph.subgraph(component)
+        
+        # Calculate layout for this component
+        subgraph_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
+        
+        # Find center of this component
+        center_x = sum(pos[0] for pos in subgraph_pos.values()) / len(subgraph_pos)
+        center_y = sum(pos[1] for pos in subgraph_pos.values()) / len(subgraph_pos)
+        component_centers.append((center_x, center_y))
+        
+        # Store positions for this component's nodes
+        all_pos.update(subgraph_pos)
+
+    # Adjust component positions to prevent overlap
+    if len(components) > 1:
+        for i, component in enumerate(components):
+            # Calculate offset for this component
+            offset_x = (i % 2) * spacing
+            offset_y = (i // 2) * spacing
+            
+            # Apply offset to all nodes in this component
+            for node in component:
+                all_pos[node] = (
+                    all_pos[node][0] + offset_x,
+                    all_pos[node][1] + offset_y
+                )
+    
+    pos = all_pos  # Use the adjusted positions
     
     # Extract node attributes
     node_x = []
     node_y = []
     node_labels = []
     node_colors = []
+    node_sizes = []
     hover_texts = []
+    
+    # Track min/max coverage for scaling
+    coverages = []
+    
+    # Define sequences and their corresponding colors
+    sequence_colors = {
+        'GAGACTGCATGG': '#50C878',  # Emerald green for theme
+        'TTTAGTGAGGGT': '#9370DB'   # Medium purple for theme
+    }
+    
+    # First pass to collect coverage values
+    for node in graph.nodes():
+        attrs = graph.nodes[node]
+        label = attrs.get('label', '')
+        if isinstance(label, str):
+            coverage = extract_coverage(label.strip('"'))
+            if coverage is not None:
+                coverages.append(coverage)
+    
+    # Calculate size scaling factors
+    min_coverage = min(coverages) if coverages else 1
+    max_coverage = max(coverages) if coverages else 1
+    min_size = 10
+    max_size = 60
     
     for node in graph.nodes():
         x, y = pos[node]
@@ -70,31 +270,67 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         node_y.append(y)
         
         attrs = graph.nodes[node]
-        
-        # Handle label with improved formatting
-        #n0 [label="ID: 0\nSeq: GACGCGACTGTACGCTCACGACGACGGAGTCG\ncov: 43" style=filled fillcolor="#4895fa30"]
         label = attrs.get('label', node)
-        if label and isinstance(label, str):
-            label = label.strip('"')
-            # Extract justrthe ID for node labels
-            if 'ID:' in label:
-                id_part = label.split('\\n')[0].replace('ID: ', '')
-                seq_part = label.split('\\n')[1].replace('Seq: ', '')
-                cov_part = label.split('\\n')[2].replace('Seq: ', '')
-                label = f"Node {id_part} {seq_part} {cov_part}"
-        node_labels.append("")
         
-        # Create detailed hover text
-        if isinstance(label, str) and 'Node' in label:
-            hover_text = label.replace('\\n', '<br>')
-            hover_texts.append(f"<b>{seq_part} {cov_part}</b>")
+        if isinstance(label, str):
+            # Handle both escaped and unescaped newlines
+            label = label.strip('"').replace('\\\\n', '\n').replace('\\n', '\n')
+            parts = label.split('\n')
+            
+            # Extract ID, sequence, and coverage
+            id_part = ''
+            seq_part = ''
+            cov_part = ''
+            
+            for part in parts:
+                if 'ID:' in part:
+                    id_part = part.replace('ID:', '').strip()
+                elif 'Seq:' in part:
+                    seq_part = part.replace('Seq:', '').strip()
+                elif 'cov:' in part:
+                    cov_part = part.replace('cov:', '').strip()
+            
+            if id_part and seq_part:
+                label = ""
+                
+                # Create hover text with proper indentation
+                hover_text = []
+                if id_part:
+                    hover_text.append(f"<b>ID:</b> {html.escape(id_part)}")
+                if seq_part:
+                    # Use the formatter that handles cross-line highlights
+                    highlighted_seq = format_sequence_with_highlights(seq_part, sequence_colors)
+                    hover_text.append(f"<b>Sequence:</b><br>{highlighted_seq}")
+                if cov_part:
+                    hover_text.append(f"<b>Coverage:</b> {html.escape(cov_part)}")
+                
+                hover_texts.append('<br>'.join(hover_text))
+                
+                # Get node style based on sequence
+                node_style = get_node_style(seq_part, sequence_colors, dark_mode)
+                node_colors.append(node_style['color'])
+            else:
+                label = str(node)
+                hover_texts.append(f"Node: {node}")
+                node_style = get_node_style(None, sequence_colors, dark_mode)
+                node_colors.append(node_style['color'])
         else:
-            hover_texts.append(f"")
+            label = str(node)
+            hover_texts.append(f"Node: {node}")
+            node_style = get_node_style(None, sequence_colors, dark_mode)
+            node_colors.append(node_style['color'])
         
-        fillcolor = attrs.get('fillcolor', '#375a7f' if dark_mode else '#1f77b4')
-        node_colors.append(clean_color(fillcolor))
+        node_labels.append(label)
+        
+        # Calculate node size based on coverage
+        coverage = extract_coverage(attrs.get('label', ''))
+        if coverage is not None and max_coverage > min_coverage:
+            size = min_size + (max_size - min_size) * (coverage - min_coverage) / (max_coverage - min_coverage)
+        else:
+            size = min_size
+        node_sizes.append(size)
 
-    # Create edges with improved spacing
+    # Create edges
     edge_x = []
     edge_y = []
     edge_texts = []
@@ -104,14 +340,12 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         x1, y1 = pos[v]
         
         if line_shape == 'linear':
-            # Direct edges without midpoint
             edge_x.extend([x0, x1, None])
             edge_y.extend([y0, y1, None])
         else:
-            # Curved edges with adjustable midpoint offset
             mid_x = (x0 + x1) / 2
             mid_y = (y0 + y1) / 2
-            offset = 0.05  # Adjust this value to control curve amount
+            offset = 0.05
             if abs(x1 - x0) > abs(y1 - y0):
                 mid_y += offset
             else:
@@ -129,10 +363,10 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
             print(f"Error processing edge {u}-{v}: {e}")
             edge_texts.append(f"<b>{u} → {v}</b>")
 
-    # Create figure with optimized layout
+    # Create figure
     fig = go.Figure()
     
-    # Add edges with improved styling
+    # Add edges
     fig.add_trace(go.Scatter(
         x=edge_x, y=edge_y,
         line=dict(
@@ -146,13 +380,15 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         showlegend=False
     ))
     
-    # Add nodes with improved styling
+    # Add nodes
     node_marker = dict(
         showscale=False,
         color=node_colors,
-        size=25,
-        line_width=2,
-        line_color='#4f5b66' if dark_mode else '#888',
+        size=node_sizes,
+        line=dict(
+            width=2,
+            color='#4f5b66' if dark_mode else '#888'
+        ),
         symbol='circle'
     )
     
@@ -168,27 +404,47 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         showlegend=False
     ))
 
-    # Update layout with improved settings
+    # Add legend for sequence colors
+    for seq, color in sequence_colors.items():
+        fig.add_trace(go.Scatter(
+            x=[None],
+            y=[None],
+            mode='markers',
+            marker=dict(size=10, color=color),
+            showlegend=True,
+            name=f'Sequence: {seq}'
+        ))
+
+    # Layout settings
     bg_color = '#2d3339' if dark_mode else '#ffffff'
     text_color = '#ffffff' if dark_mode else '#000000'
     
-    # Calculate layout dimensions based on graph size
+    # Calculate padding based on component spread
     x_range = max(node_x) - min(node_x)
     y_range = max(node_y) - min(node_y)
     
-    # Add padding to ranges
-    padding = 0.2
+    padding = 0.3  # Increased padding to accommodate separated components
     x_min = min(node_x) - x_range * padding
     x_max = max(node_x) + x_range * padding
     y_min = min(node_y) - y_range * padding
     y_max = max(node_y) + y_range * padding
     
     fig.update_layout(
-        showlegend=False,
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            bgcolor=bg_color,
+            bordercolor=text_color,
+            borderwidth=1,
+            font=dict(color=text_color)
+        ),
         hovermode='closest',
-        height=2000,  # Fixed height
-        width=2000,  # Fixed width
-        margin=dict(b=40, l=20, r=20, t=40),  # Adjusted margins
+        height=1000,
+        width=1000,
+        margin=dict(b=40, l=20, r=20, t=40),
         annotations=[
             dict(
                 text="Assembly Graph",
@@ -196,7 +452,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 xref="paper", 
                 yref="paper",
                 x=0.5, 
-                y=1.02,  # Moved title above plot
+                y=1.02,
                 font=dict(size=16, color=text_color)
             )
         ],
@@ -205,8 +461,8 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
             zeroline=False,
             showticklabels=False,
             range=[x_min, x_max],
-            scaleanchor="y",  # This ensures equal scaling
-            scaleratio=1      # Force 1:1 aspect ratio
+            scaleanchor="y",
+            scaleratio=1
         ),
         yaxis=dict(
             showgrid=False,
@@ -276,41 +532,8 @@ app_ui = ui.page_fluid(
                 ),
             ),
             ui.panel_well(
-                ui.h3("Assembly Parameters"),
-                ui.input_selectize(
-                    "umi", 
-                    "Select UMI",
-                    choices=[]
-                ),
-                ui.input_slider(
-                    "kmer_size",
-                    "K-mer Size",
-                    min=15,
-                    max=63,
-                    value=31,
-                    step=2
-                ),
-                ui.input_slider(
-                    "min_coverage",
-                    "Minimum Coverage",
-                    min=1,
-                    max=50,
-                    value=17
-                ),
-                ui.input_checkbox(
-                    "auto_k",
-                    "Auto K-mer Size",
-                    value=True
-                ),
-                ui.input_action_button(
-                    "assemble",
-                    "Assemble Contig",
-                    class_="btn-primary"
-                ),
-                ui.hr(),  # Add a visual separator
-                ui.hr(),  # Add a visual separator
-                ui.hr(),  # Add a visual separator
-                ui.h4("Parameter Sweep"),
+
+                ui.h3("Parameter Sweep"),
                 ui.input_slider(
                     "k_start",
                     "K-mer Range Start",
@@ -356,6 +579,53 @@ app_ui = ui.page_fluid(
                     "Run Parameter Sweep",
                     class_="btn-primary"
                 ),
+                ui.hr(),
+                ui.hr(),
+                ui.hr(),
+
+                ui.h3("Assembly Parameters"),
+                ui.input_selectize(
+                    "umi", 
+                    "Select UMI",
+                    choices=[]
+                ),
+                # ui.input_slider(
+                #     "min_coverage",
+                #     "Minimum Coverage",
+                #     min=1,
+                #     max=200,
+                #     value=17
+                # ),
+                ui.input_text(
+                     "min_coverage",
+                     "Minimum Coverage",
+                     value=17,
+                    placeholder=17),
+                ui.input_text(
+                    "kmer_size", 
+                    "K-mer Range Start", 
+                    value=1,
+                    placeholder=1),
+
+                # ui.input_slider(
+                #     "kmer_size",
+                #     "K-mer Size",
+                #     min=15,
+                #     max=63,
+                #     value=31,
+                #     step=2
+                # ),
+                ui.input_checkbox(
+                    "auto_k",
+                    "Auto K-mer Size",
+                    value=True
+                ),
+                ui.input_action_button(
+                    "assemble",
+                    "Assemble Contig",
+                    class_="btn-primary"
+                ),
+                ui.hr(),
             ),
             width=500,
         ),
@@ -392,20 +662,25 @@ app_ui = ui.page_fluid(
                 )
             ),
             ui.nav_panel("Assembly Results",
-                ui.row(
-                    ui.column(6,
+                    ui.row(
                         ui.panel_well(
-                            ui.h4("Assembly Statistics"),
-                            ui.pre(ui.output_text("assembly_stats"))
+                            ui.output_ui("assembly_stats"),
+                            ui.h3("Contig Sequence"),
+                            ui.output_text_verbatim("contig_sequence"),
+
                         )
                     ),
-                    ui.column(6,
-                        ui.panel_well(
-                            ui.h4("Contig Sequence"),
-                            ui.output_text("contig_graph_path"),
-                            ui.output_text_verbatim("contig_sequence")
+                    ui.row(
+                        ui.column(3,
+                            ui.panel_well(
+                                ui.h4("K-mer vs Coverage Sweep"),
+                                output_widget("sweep_heatmap")
+                            )
+                        ),
+                        ui.column(9,
+                            ui.h4("Assembly Graph"),
+                            output_widget("assembly_graph")
                         )
-                    )
                 ),
             ui.row(
                 ui.column(3,
@@ -435,28 +710,26 @@ app_ui = ui.page_fluid(
                 )
             ),
                          ui.row(
-                        ui.h4("Assembly Graph"),
-                        output_widget("assembly_graph")
 
                              ),
 
             ),
-            ui.nav_panel("Parameter Sweep",
-                ui.row(
-                    ui.column(6,
-                        ui.panel_well(
-                            ui.h4("K-mer vs Coverage Sweep"),
-                            output_widget("sweep_heatmap")
-                        )
-                    )
-                )
-            )
         )
     ),
     theme=shinyswatch.theme.slate()
 )
 
 def server(input, output, session):
+    # TODO: example of how to sync inputs
+    #     # Create reactive variables for shared values
+    shared_value1 = reactive.Value(None)
+    # shared_value2 = reactive.Value(1800)
+    #
+    # # Use the helper function for each pair of inputs
+    # sync_slider_and_text(input, session, "kmer_size", "kmer_size_txt", shared_value1)
+    # sync_slider_and_text(input, session, "slider2", "text2", shared_value2)
+    #
+
     # Reactive data storage
     data = reactive.Value(None)
     assembly_result = reactive.Value(None)
@@ -615,8 +888,8 @@ def server(input, output, session):
                 df
                 .pp.assemble_umi(
                     target_umi=input.umi(),
-                    k=input.kmer_size(),
-                    min_cov=input.min_coverage(),
+                    k=int(input.kmer_size()),
+                    min_cov=int(input.min_coverage()),
                     auto_k=input.auto_k(),
                     export_graphs=True,
                     only_largest=True,
@@ -652,21 +925,13 @@ def server(input, output, session):
             return "No assembly results available"
             
         read_count = data().filter(pl.col('umi') == input.umi()).height
-        return f"""Assembly Statistics
-        Contig Length: {len(assembly_result())}
-        Input Reads: {read_count}
-        Selected UMI: {input.umi()}
-        K-mer Size: {input.kmer_size()}
-        Min Coverage: {input.min_coverage()}"""
-
-
-    @output
-    @render.text
-    def contig_graph_path():
-        if assembly_result() is None:
-            return "No contig sequence available"
-        graph_path = f"{Path(__file__).parent}/{input.umi()}__preliminary.dot"
-        return graph_path 
+        return ui.HTML(f"""
+    Target UMI: <h4>{input.umi()}</h4>
+    Contig Length: <span style="color: #ff8080;">{len(assembly_result())}</span> 
+    Input Reads: <span style="color: #ffffff;">{read_count}</span> 
+    K-mer Size: <span style="color: #ffa07a;">{input.kmer_size()}</span> 
+    Min Coverage: <span style="color: #ffa07a;">{input.min_coverage()}</span>"""
+        )
 
     @output
     @render.text
