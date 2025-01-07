@@ -6,7 +6,84 @@ from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
 
+import tempfile
+import os
+from pathlib import Path
+import html
+
+def highlight_sequences_in_table(text):
+    """Highlight specific sequences in text with HTML formatting."""
+    sequence_colors = {
+        'GAGACTGCATGG': '#50C878',  # Emerald green for theme
+        'TTTAGTGAGGGT': '#9370DB'   # Medium purple for theme
+    }
+    
+    # First escape any HTML in the original text
+    escaped_text = html.escape(text)
+    result = escaped_text
+    
+    # Keep track of where we've inserted spans to avoid nested tags
+    replacements = []
+    
+    # Find all occurrences of each sequence and their positions
+    for seq, color in sequence_colors.items():
+        start = 0
+        while True:
+            pos = escaped_text.find(seq, start)
+            if pos == -1:
+                break
+            replacements.append((
+                pos,
+                pos + len(seq),
+                f'<span style="color: {color}">{seq}</span>'
+            ))
+            start = pos + 1
+    
+    # Sort replacements by start position in reverse order
+    replacements.sort(key=lambda x: x[0], reverse=True)
+    
+    # Apply the replacements
+    for start, end, html_span in replacements:
+        result = result[:start] + html_span + result[end:]
+    
+    return result
+
+def format_top_contigs_table(df):
+    """Format top contigs dataframe as an HTML table with highlighted sequences."""
+    html_output = ["<table class='table table-dark table-striped'>"]
+    
+    # Add header
+    html_output.append("<thead><tr>")
+    for col in ['Node ID', 'Sequence', 'Coverage', 'Length']:
+        html_output.append(f"<th>{col}</th>")
+    html_output.append("</tr></thead>")
+    
+    # Add body
+    html_output.append("<tbody>")
+    for row in df.iter_rows():
+        html_output.append("<tr>")
+        # Node ID
+        html_output.append(f"<td>{row[0]}</td>")
+        # Sequence with highlighting
+        highlighted_seq = highlight_sequences_in_table(row[1])
+        html_output.append(f"<td style='font-family: monospace;'>{highlighted_seq}</td>")
+        # Coverage
+        html_output.append(f"<td>{row[2]}</td>")
+        # Length
+        html_output.append(f"<td>{row[3]}</td>")
+        html_output.append("</tr>")
+    
+    html_output.append("</tbody></table>")
+    return "\n".join(html_output)
+
+
+
 from ogtk.ltr.fracture.pipeline import api_ext
+
+pl.Config().set_fmt_str_lengths(666)
+
+
+
 
 def sync_slider_and_text(input, session, slider_id, text_id, shared_value):
     # Update shared_value when slider changes
@@ -603,7 +680,7 @@ app_ui = ui.page_fluid(
                     placeholder=17),
                 ui.input_text(
                     "kmer_size", 
-                    "K-mer Range Start", 
+                    "K-mer Size", 
                     value=1,
                     placeholder=1),
 
@@ -627,18 +704,19 @@ app_ui = ui.page_fluid(
                 ),
                 ui.hr(),
             ),
-            width=500,
+            width=300,
         ),
         
         # Main panel
         ui.navset_tab(
             ui.nav_panel("Overview",
                 ui.row(
-                    ui.column(6,
+                    ui.column(2,
                         ui.panel_well(
                             ui.h4("Summary Statistics"),
                             ui.p("Total UMIs: ", ui.output_text("total_umis")),
-                            ui.p("Median Reads/UMI: ", ui.output_text("median_reads"))
+                            ui.p("Median Reads/UMI: ", ui.output_text("median_reads")),
+                            ui.p("Read length: ", ui.output_text_verbatim("read_length"))
                         )
                     ),
                     ui.column(6,
@@ -667,25 +745,13 @@ app_ui = ui.page_fluid(
                             ui.output_ui("assembly_stats"),
                             ui.h3("Contig Sequence"),
                             ui.output_text_verbatim("contig_sequence"),
+                            ui.output_ui("top_contigs"),
 
                         )
                     ),
-                    ui.row(
-                        ui.column(3,
-                            ui.panel_well(
-                                ui.h4("K-mer vs Coverage Sweep"),
-                                output_widget("sweep_heatmap")
-                            )
-                        ),
-                        ui.column(9,
-                            ui.h4("Assembly Graph"),
-                            output_widget("assembly_graph")
-                        )
-                ),
             ui.row(
                 ui.column(3,
                     ui.panel_well(
-                        ui.h4("Graph Visualization Options"),
                         ui.input_select(
                             "graph_type",
                             "Graph Type",
@@ -695,6 +761,10 @@ app_ui = ui.page_fluid(
                             },
                             selected="compressed"
                         ),
+                    )
+                ),
+                ui.column(3,
+                    ui.panel_well(
                         ui.input_select(
                             "line_shape",
                             "Edge Style",
@@ -706,14 +776,31 @@ app_ui = ui.page_fluid(
                             },
                             selected="linear"
                         ),
-                    )
-                )
+                        )
+                          ),
+
             ),
+                    ui.row(
+                        ui.column(9,
+                            ui.h4("Assembly Graph"),
+                                          ui.div(output_widget("assembly_graph"), style="height: 1000px;"),
+                            
+                        )
+                ),
                          ui.row(
 
                              ),
 
             ),
+
+            ui.nav_panel("Sweep Results",
+                        ui.column(9,
+                            ui.panel_well(
+                                ui.h4("K-mer vs Coverage Sweep"),
+                                output_widget("sweep_heatmap")
+                            )
+                        ),
+                         )
         )
     ),
     theme=shinyswatch.theme.slate()
@@ -789,6 +876,13 @@ def server(input, output, session):
             return "No data"
         return str(data().group_by('umi').len().get_column('len').median())
     
+    @output
+    @render.text 
+    def read_length():
+        if data() is None:
+            return "No data"
+        return str(data().get_column('r2_seq').str.len_chars().describe())
+
     @output
     @render.text
     def selected_umi_stats():
@@ -934,14 +1028,32 @@ def server(input, output, session):
         )
 
     @output
-    @render.text
-    def contig_sequence():
-        if assembly_result() is None:
-            return "No contig sequence available"
-        return assembly_result()
+    @render.text 
+    @reactive.event(assembly_result)  # Make it react to assembly changes
+    def top_contigs():
+        if data() is None or assembly_result() is None:
+            return "No contigs available"
+            
+        try:
+            base_path = f"{Path(__file__).parent}/{input.umi()}"
+            graph_path = f"{base_path}__compressed.csv"
+            
+            if not Path(graph_path).exists():
+                return "Contig graph data not found"
 
-
-    # Add to existing server function:
+            df = (
+                pl.read_csv(graph_path)
+                .with_columns(pl.col('sequence').str.len_chars().alias('length'))
+                .sort('coverage', 'length', descending=True)
+                .select('node_id', 'sequence', 'coverage', 'length')
+                .head(5)
+            )
+            pl.Config().set_tbl_width_chars(df.get_column('length').max()+1)
+            return ui.HTML(format_top_contigs_table(df))
+            
+        except Exception as e:
+            print(f"Error loading top contigs: {str(e)}")
+            return "Error loading contig data"
 
     @reactive.Effect
     @reactive.event(input.run_sweep)
@@ -1013,8 +1125,9 @@ def server(input, output, session):
                 color="Contig Length"
             ),
             title="K-mer Size vs Coverage Parameter Sweep",
-            aspect="auto",  # Maintain readability regardless of dimensions
-            color_continuous_scale="Viridis"  # Use a color scale that works well with dark theme
+            width=1000,
+            height=1000,
+            color_continuous_scale="RdYlBu_r"
         )
         
         # Update layout to match dark theme
@@ -1042,7 +1155,7 @@ def server(input, output, session):
         graph_path = f"{base_path}__{input.graph_type()}.dot"
         
         if not Path(graph_path).exists():
-            return go.Figure(layout=dark_template['layout'])
+            return go.Figure(layout=dark_template['layout'], width=1000, height=1000)
             
         # Create graph visualization with selected options
         fig = create_graph_plot(
