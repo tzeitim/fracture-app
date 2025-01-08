@@ -1,15 +1,35 @@
 from shiny import App, render, ui, reactive
 from shinywidgets import output_widget, render_plotly
+from shiny.session import get_current_session
 import shinyswatch
+
+
 import polars as pl
 from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
+import pandas as pd
+import sys
+from psutil import cpu_count, cpu_percent
+import numpy as np
+
 
 import tempfile
 import os
 from pathlib import Path
 import html
+
+import matplotlib
+import matplotlib.pyplot as plt
+matplotlib.use("agg")
+
+import ogtk.ltr.align as al
+
+# max number of samples to retain
+MAX_SAMPLES = 1000
+# secs between samples
+SAMPLE_PERIOD = 1
+
 
 def highlight_sequences_in_table(text):
     """Highlight specific sequences in text with HTML formatting."""
@@ -224,6 +244,12 @@ def get_node_style(seq, sequence_colors, dark_mode):
     # Clean up the sequence string
     seq = seq.strip('"').strip()
     
+    # Check for both sequences
+    has_both = all(target_seq in seq for target_seq in sequence_colors.keys())
+    if has_both:
+        return dict(color='#FFA500', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))  # Orange color
+    
+    # Check for individual sequences
     for target_seq, color in sequence_colors.items():
         if target_seq in seq:
             return dict(color=color, line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
@@ -587,6 +613,7 @@ app_ui = ui.page_fluid(
         # Sidebar panel
         ui.sidebar(
             ui.panel_well(
+                "AACCCCAGAGGCTCAAGTGG",
                 ui.h3("Data Input"),
                 ui.input_radio_buttons(
                     "input_type",
@@ -614,7 +641,7 @@ app_ui = ui.page_fluid(
                 ui.input_slider(
                     "k_start",
                     "K-mer Range Start",
-                    min=1,
+                     min=1,
                     max=20,
                     value=1,
                     step=1
@@ -704,7 +731,14 @@ app_ui = ui.page_fluid(
                 ),
                 ui.hr(),
             ),
-            width=300,
+            ui.panel_well(
+                ui.h3("CPU Monitor"),
+                ui.input_switch("cpu_hold", "Freeze Display", value=True),
+                ui.input_action_button("cpu_reset", "Clear History", class_="btn-sm"),
+                ui.input_numeric("sample_count", "Samples to show", value=50),
+                ui.output_plot("cpu_plot")
+            ),
+            width=350,
         ),
         
         # Main panel
@@ -781,11 +815,15 @@ app_ui = ui.page_fluid(
 
             ),
                     ui.row(
-                        ui.column(9,
-                            ui.h4("Assembly Graph"),
-                                          ui.div(output_widget("assembly_graph"), style="height: 1000px;"),
+                        ui.column(6,
+                        ui.h4("Assembly Graph"),
+                          ui.div(output_widget("assembly_graph"), style="height: 1000px;"),
                             
-                        )
+                        ),
+                        ui.column(6,
+                          ui.h4("Coverage Plot (from uniqued reads!!)"),
+                          ui.div(output_widget("coverage_plot"), style="height: 1000px;"),
+                        ),
                 ),
                          ui.row(
 
@@ -822,6 +860,97 @@ def server(input, output, session):
     assembly_result = reactive.Value(None)
     sweep_results = reactive.Value(None)
     
+    ncpu = cpu_count(logical=True)
+    cpu_history = reactive.Value(None)
+    
+    @reactive.calc
+    def cpu_current():
+        reactive.invalidate_later(SAMPLE_PERIOD)
+        return cpu_percent(percpu=True)
+    
+    @reactive.calc
+    def cpu_history_with_hold():
+        if not input.cpu_hold():
+            return cpu_history()
+        else:
+            input.cpu_reset()
+            with reactive.isolate():
+                return cpu_history()
+
+    @reactive.effect
+    def collect_cpu_samples():
+        new_data = np.vstack(cpu_current())
+        with reactive.isolate():
+            if cpu_history() is None:
+                cpu_history.set(new_data)
+            else:
+                combined_data = np.hstack([cpu_history(), new_data])
+                if combined_data.shape[1] > MAX_SAMPLES:
+                    combined_data = combined_data[:, -MAX_SAMPLES:]
+                cpu_history.set(combined_data)
+
+    @reactive.effect(priority=100)
+    @reactive.event(input.cpu_reset)
+    def reset_cpu_history():
+        cpu_history.set(None)
+
+    def plot_cpu(history, samples, ncpu, cmap='viridis'):
+        """Plot CPU history using matplotlib."""
+        if history is None or history.shape[1] == 0:
+            fig, ax = plt.subplots(figsize=(8, 4))
+            ax.text(0.5, 0.5, "No data", ha="center", va="center")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            return fig
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), height_ratios=[3, 1])
+        fig.patch.set_facecolor("#2d3339")  # Match slate theme background
+        
+        # Last n samples for the line plots
+        n = min(samples, history.shape[1])
+        x = np.arange(n)
+        
+        # Line plot for each CPU
+        for i in range(ncpu):
+            y = history[i, -n:]
+            ax1.plot(x, y, alpha=0.7, linewidth=1)
+        
+        ax1.set_xlim(0, n - 1)
+        ax1.set_ylim(0, 100)
+        ax1.set_ylabel("CPU %")
+        ax1.grid(True, alpha=0.3)
+        ax1.set_facecolor("#2d3339")
+        ax1.tick_params(colors="white")
+        for spine in ax1.spines.values():
+            spine.set_color("white")
+        
+        # Heatmap
+        if history.shape[1] > 0:
+            ax2.imshow(
+                history[:, -n:],
+                aspect="auto",
+                cmap=cmap,
+                interpolation="nearest",
+                vmin=0,
+                vmax=100,
+            )
+        
+        ax2.set_yticks(range(ncpu))
+        ax2.set_yticklabels([f"CPU {i}" for i in range(ncpu)])
+        ax2.tick_params(colors="white")
+        
+        fig.tight_layout()
+        return fig
+
+    @render.plot
+    def cpu_plot():
+        """Render the CPU plot."""
+        history = cpu_history_with_hold()
+        if history is None:
+            return plot_cpu(None, input.sample_count(), ncpu)
+        return plot_cpu(history, input.sample_count(), ncpu)
+    
+
     @render.text
     def value():
         return input.parquet_file()
@@ -1048,7 +1177,9 @@ def server(input, output, session):
                 .select('node_id', 'sequence', 'coverage', 'length')
                 .head(5)
             )
+
             pl.Config().set_tbl_width_chars(df.get_column('length').max()+1)
+
             return ui.HTML(format_top_contigs_table(df))
             
         except Exception as e:
@@ -1112,11 +1243,83 @@ def server(input, output, session):
 
     @output
     @render_plotly
+    @reactive.event(input.umi)
+    def coverage_plot():
+        mods = pl.read_parquet('mods.parquet')
+        ref_str = mods.filter(pl.col('mod')=='mod_0')['seq'][0]
+        if data() is None:
+            empty_fig = go.Figure(layout=dark_template['layout'])
+            empty_fig.update_layout(
+                width=1000,
+                height=1000,
+                annotations=[dict(
+                    text="No data available",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(color='#ffffff', size=14)
+                )]
+            )
+            return empty_fig
+        
+
+        df =(
+                data()
+                .filter(pl.col('umi')==input.umi())
+                .with_columns(intbc=pl.lit('in')) # dummy intbc field needed for alignment
+        )
+
+        result = al.compute_coverage(df , ref_str, max_range=len(ref_str))
+            
+        fig = px.line(
+            result,
+            x='covered_positions',
+            y='coverage',
+            labels=dict(
+                x="Position in reference",
+                y="Reads",
+            ),
+            title="Coverage of raw reads",
+            width=1000,
+            height=1000,
+        )
+        
+        fig.update_layout(
+            **dark_template['layout'],
+            xaxis_title="Minimum Coverage",
+            yaxis_title="K-mer Size",
+        )
+        
+        # Ensure axis labels are visible
+        fig.update_xaxes(showticklabels=True, title_standoff=25)
+        fig.update_yaxes(showticklabels=True, title_standoff=25)
+        
+        return fig
+
+    @output
+    @render_plotly
     def sweep_heatmap():
         if sweep_results() is None:
-            return go.Figure(layout=dark_template['layout'])
+            # Create empty figure with specific dimensions
+            empty_fig = go.Figure(layout=dark_template['layout'])
+            empty_fig.update_layout(
+                width=1000,  # Match the width used in data case
+                height=1000, # Match the height used in data case
+                # Optional: Add a message indicating no data
+                annotations=[dict(
+                    text="No sweep results available",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(color='#ffffff', size=14)
+                )]
+            )
+            return empty_fig
             
-        # Create heatmap using plotly express
         fig = px.imshow(
             sweep_results(),
             labels=dict(
@@ -1130,7 +1333,6 @@ def server(input, output, session):
             color_continuous_scale="RdYlBu_r"
         )
         
-        # Update layout to match dark theme
         fig.update_layout(
             **dark_template['layout'],
             xaxis_title="Minimum Coverage",
@@ -1148,15 +1350,42 @@ def server(input, output, session):
     @render_plotly
     def assembly_graph():
         if assembly_result() is None:
-            return go.Figure(layout=dark_template['layout'])
+            empty_fig = go.Figure(layout=dark_template['layout'])
+            empty_fig.update_layout(
+                width=1000,
+                height=1000,
+                annotations=[dict(
+                    text="No assembly graph available",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(color='#ffffff', size=14)
+                )]
+            )
+            return empty_fig
             
         # Build path based on selected graph type
         base_path = f"{Path(__file__).parent}/{input.umi()}"
         graph_path = f"{base_path}__{input.graph_type()}.dot"
-        
         if not Path(graph_path).exists():
-            return go.Figure(layout=dark_template['layout'], width=1000, height=1000)
-            
+            empty_fig = go.Figure(layout=dark_template['layout'])
+            empty_fig.update_layout(
+                width=1000,
+                height=1000,
+                annotations=[dict(
+                    text="Graph file not found",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(color='#ffffff', size=14)
+                )]
+            )
+            return empty_fig        
+
         # Create graph visualization with selected options
         fig = create_graph_plot(
             graph_path, 
