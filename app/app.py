@@ -685,29 +685,35 @@ app_ui = ui.page_fluid(
                         "Select Input Method",
                         {
                             "upload": "Upload File",
-                            "remote": "Remote File Path"
+                            "remote": "Remote File Path",
+                            "local": "Local File Path"
                             },
                         selected="remote"
                         ),
                     ui.panel_conditional(
                         "input.input_type === 'remote'",
-                        
-ui.input_selectize(
-    "system_prefix",
-    "Select System",
-    choices=SYSTEM_PREFIXES,
-    selected="laptop"
-),
-              ui.input_selectize(
-                  "remote_path", 
-                  "Select Dataset",
-                  choices=db,
-                  ),
+
+                        ui.input_selectize(
+                            "system_prefix",
+                            "Select System",
+                            choices=SYSTEM_PREFIXES,
+                            selected="laptop"
+                            ),
+                        ui.input_selectize(
+                            "remote_path", 
+                            "Select Dataset",
+                            choices=db,
+                            ),
                         ),
 
                     ui.panel_conditional(
                         "input.input_type === 'upload'",
                         ui.input_file("parquet_file", "Upload Parquet File", accept=[".parquet"])
+                        ),
+
+                    ui.panel_conditional(
+                        "input.input_type === 'local'",
+                        ui.input_text("parquet_file_local", "Local Parquet File", value='jijo.parquet')
                         ),
                     ),
                 ui.panel_well(
@@ -1054,7 +1060,7 @@ def server(input, output, session):
         return input.parquet_file()
 
     @reactive.Effect
-    @reactive.event(input.parquet_file, input.remote_path, input.input_type, input.system_prefix, input.sample_n_umis, input.sample_min_reads, input.sample_umis)
+    @reactive.event(input.parquet_file_local, input.parquet_file, input.remote_path, input.input_type, input.system_prefix, input.sample_n_umis, input.sample_min_reads, input.sample_umis)
 
     def load_data():
         try:
@@ -1065,6 +1071,9 @@ def server(input, output, session):
 
             if input.input_type() == "upload" and input.parquet_file() is not None:
                 file_path = input.parquet_file()[0]["datapath"]
+            elif input.input_type() == "local" and input.parquet_file_local() is not None:
+                file_path = input.parquet_file_local()
+
             elif input.input_type() == "remote" and input.remote_path:
                 prefix = SYSTEM_PREFIXES[input.system_prefix()]
                 file_path = prefix + input.remote_path()
