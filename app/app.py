@@ -13,6 +13,10 @@ import sys
 #from psutil import cpu_count, cpu_percent
 import numpy as np
 
+import re 
+import networkx as nx
+import plotly.graph_objects as go
+
 
 import tempfile
 import os
@@ -305,7 +309,36 @@ def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=Non
         color='rgba(0,0,0,0)',
         line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
     )
-def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', debug=False, path_nodes=None):
+
+def create_weighted_graph(graph, weight_method):
+    nodes = graph.nodes
+    edges = graph.edges
+    coverages = extract_coverage(graph)
+    seqs = extract_seqs(graph)
+
+    G = nx.DiGraph()
+    
+    # First add all nodes with their attributes
+    for node, attrs in graph.nodes(data=True):
+        G.add_node(node, **attrs)  # This preserves all node attributes including labels
+
+    # Then add weighted edges
+    for u, v, edge_attrs in edges(data=True):
+        if weight_method == "nlog":
+            avg_coverage = (int(coverages[u]) + int(coverages[v])) / 2
+            weight = -np.log(avg_coverage)
+        if weight_method == "inverse":
+            weight = 2.0 / (int(coverages[u]) + int(coverages[v])) 
+        
+        # Add edge with both weight and original attributes
+        edge_data = edge_attrs.copy()
+        edge_data['weight'] = weight
+        G.add_edge(u, v, **edge_data)
+
+    return G
+
+def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', debug=False, path_nodes=None, weighted=False, weight_method='nlog', 
+                      spring_args=None):
     """Create an interactive plot of the assembly graph.
     
     Args:
@@ -316,11 +349,9 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         debug (bool): Whether to print debug information
         path_nodes (list/set): Node IDs that are part of the path
     """
-    import networkx as nx
-    from graphviz import Source
-    import plotly.graph_objects as go
-    import html
-    
+    if spring_args is None:
+        spring_args = {'k': 1.5, 'iterations': 50, 'scale': 2.0} 
+
     # Define sequences and their colors
     sequence_colors = {
         'GAGACTGCATGG': '#50C878',  # Emerald green
@@ -334,8 +365,12 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
     except Exception as e:
         return create_empty_figure(f"Error creating graph: {str(e)}")
 
-    # Calculate layout
-    pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+    if weighted:
+        graph = create_weighted_graph(graph, weight_method)
+        pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+    else:
+        # Calculate layout
+        pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
     
     # Extract node information
     node_x, node_y = [], []
@@ -575,27 +610,48 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
             font_color=text_color
         )
     )
-def extract_coverage(label):
-    """Extract coverage value from node label.
-    
-    Args:
-        label (str): Node label text
-        
-    Returns:
-        int or None: Coverage value if found, None otherwise
-    """
+
+
+def extract_coverage(input_data):
+    """Extract coverage value from either a node label string or graph."""
+    if isinstance(input_data, str):
+        # Handle string input (node label)
+        match = re.search(r'cov:\s*(\d+)', input_data)
+        return int(match.group(1)) if match else None
+    else:
+        # Handle graph input
+        coverages = {}
+        for node in input_data.nodes():
+            attrs = input_data.nodes[node]
+            label = attrs.get('label', '')
+            if isinstance(label, str):
+                match = re.search(r'cov:\s*(\d+)', label.strip('"'))
+                if match:
+                    coverages[node] = int(match.group(1))
+        return coverages
+
+def extract_seqs(graph):
+    coverages = {}    # First pass to collect coverage values
+
+    for node in graph.nodes():
+        attrs = graph.nodes[node]
+        label = attrs.get('label', '')
+        if isinstance(label, str):
+            coverage = extract_attr_from_label(label.strip('"'), r'Seq:\s*(.+)\\n')
+            if coverage is not None:
+                coverages[node] = coverage
+    return coverages
+
+def extract_attr_from_label(label, attr_re):
+    """Extract coverage value from node label."""
     if not label or not isinstance(label, str):
         return None
-        
-    # Handle both 'cov: X' and just the label containing coverage
     import re
-    match = re.search(r'cov:\s*(\d+)', label)
+    match = re.search(attr_re, label)
     if match:
-        try:
-            return int(match.group(1))
-        except ValueError:
-            return None
+        return match.group(1)
     return None
+
 
 def format_sequence_with_highlights(seq_part, sequence_colors, line_length=60):
     """Format sequence with highlights, properly handling HTML tags.
@@ -699,7 +755,7 @@ app_ui = ui.page_fluid(
         #shiny-notification-panel {
             position: fixed;
             top: 20px;
-            left: 20px;
+            right: 20px;
             z-index: 1050; /* Ensure it appears on top */
         }
     """),
@@ -710,6 +766,8 @@ app_ui = ui.page_fluid(
             # Sidebar panel
             ui.sidebar(
                 ui.panel_well(
+                    ui.h1("Hall of Fame"),
+                    ui.HTML("TTTTCCCGACGGCTGATCGG messy<br>"),
                     ui.HTML("AACATGGACGGTACATCGGG great example of horror<br>"),
                     ui.HTML("AACCCCAGAGGCTCAAGTGG full<br>"),
                     ui.HTML("GCTCGTATCCCGAAGCTAGG failed but overlaps<br>"),
@@ -903,6 +961,17 @@ ui.column(4,
                       },
                   selected="shortest_path"
                   ),
+              ui.input_action_button(
+                  "assemble",
+                  "Assemble Contig",
+                  class_="btn-primary"
+                  ),
+
+              ui.input_action_button(
+                  "draw_graph",
+                  "Draw Graph",
+                  class_="btn-primary"
+                  ),
               ui.input_text("start_anchor", "Start Anchor", value="GAGACTGCATGG", placeholder="Sequence at the 5' end"),
               ui.input_text("end_anchor", "End Anchor", value="TTTAGTGAGGGT", placeholder="Sequence at the 3' end"),
               ui.input_selectize(
@@ -925,11 +994,6 @@ ui.column(4,
                   "Auto K-mer Size",
                   value=True
                   ),
-              ui.input_action_button(
-                  "assemble",
-                  "Assemble Contig",
-                  class_="btn-primary"
-                  )
               )
           ),
 ui.column(4,
@@ -982,6 +1046,50 @@ ui.column(4,
                                                   "use_polished",
                                                   "Use Polished Assembly",
                                                   value=False
+                                                  ),
+                                              ),
+                                          ui.panel_well(
+                                              ui.h4("Graph Layout Options"),
+                                              ui.input_switch(
+                                                  "use_weighted",
+                                                  "Use Weighted Layout",
+                                                  value=False
+                                                  ),
+                                              ui.input_select(
+                                                  "weight_method",
+                                                  "Weight Calculation Method",
+                                                  choices={
+                                                      "nlog": "Negative Log Coverage",
+                                                      "inverse": "Inverse Coverage"
+                                                      },
+                                                  selected="nlog"
+                                                  )
+                                              ),
+                                          ui.panel_well(
+                                              ui.h4("Graph Layout Parameters"),
+                                              ui.input_numeric(
+                                                  "layout_k",
+                                                  "Node Spacing (k)",
+                                                  value=1.5,
+                                                  min=0.1,
+                                                  max=5.0,
+                                                  step=0.1
+                                                  ),
+                                              ui.input_numeric(
+                                                  "layout_iterations",
+                                                  "Layout Iterations",
+                                                  value=50,
+                                                  min=10,
+                                                  max=200,
+                                                  step=10
+                                                  ),
+                                              ui.input_numeric(
+                                                  "layout_scale",
+                                                  "Layout Scale",
+                                                  value=2.0,
+                                                  min=0.5,
+                                                  max=5.0,
+                                                  step=0.5
                                                   ),
                                               ),
                                           # output_widget("assembly_graph")
@@ -1296,6 +1404,7 @@ def server(input, output, session):
     @reactive.Effect
     @reactive.event(input.assemble)
     def run_regular_assembly():
+
         try:
             if data() is None or not input.umi():
                 ui.notification_show("Please load data and select a UMI first", type="warning")
@@ -1379,9 +1488,7 @@ def server(input, output, session):
                         path_df = (pl.read_csv(path_file)
                                    .with_columns(pl.col('sequence').str.len_chars().alias('length'))
                                    .sort('coverage', 'length', descending=True))
-                        # path_df will be needed for adding decorate to nodes in the graph plot
-                        # but assembly_results are to ones proccessed by path_results_output for display
-                        print(path_df)
+
                         path_results.set({
                             'results':result,
                             'path_nodes': path_df['sequence'].to_list(),
@@ -1403,7 +1510,7 @@ def server(input, output, session):
 
     @output
     @render.text
-    @reactive.event(input.top_path, assembly_result)  
+    @reactive.event( assembly_result, input.top_path)  
     def path_results_output():
         if path_results() is None:
             return ""
@@ -1679,6 +1786,8 @@ def server(input, output, session):
 ###
     @output
     @render_plotly
+    @reactive.event(input.use_weighted, input.draw_graph, input.assemble)
+
     def assembly_graph():
         if assembly_result() is None:
             empty_fig = go.Figure(layout=dark_template['layout'])
@@ -1741,6 +1850,14 @@ def server(input, output, session):
                 line_shape='linear',  # Since we removed line_shape selector
                 graph_type=input.graph_type(),
                 path_nodes= path_nodes,
+                weighted=input.use_weighted(),
+                weight_method=input.weight_method(),
+                spring_args={
+                    'k':input.layout_k(),
+                    'iterations':input.layout_iterations(),
+                    'scale':input.layout_scale(),
+                    },
+
 
                 )
 
