@@ -1433,6 +1433,35 @@ def server(input, output, session):
 
     @output
     @render.text
+    @reactive.event( assembly_result, input.top_path)  
+    def path_results_output():
+        if path_results() is None:
+            return ""
+        
+
+        head_n_paths = 5 if input.top_path() == '' else int(input.top_path())
+
+        df = (
+                path_results()['results']
+                .with_columns(pl.col('contig').str.len_chars().alias('Length'))
+                .with_columns(
+                    coverage=pl.lit(100), # change the average path weight or similar
+                    note_type=pl.lit('_terminal'),
+                    outgoing_nodes=pl.lit(100),
+                    outgoing_directions=pl.lit('Left'),
+                    )
+                .rename({'umi':'node_id', 'contig':'sequence'})
+                .head(head_n_paths)
+                )
+
+        if df.shape[0] == 0:
+            return "No path results available"
+
+        pl.Config().set_tbl_width_chars(df.get_column('Length').max()+1)
+        return ui.HTML(format_top_contigs_table(df))
+
+    @output
+    @render.text
     def assembly_stats():
         if data() is None or assembly_result() is None:
             return "No assembly results available"
