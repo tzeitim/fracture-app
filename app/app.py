@@ -31,19 +31,19 @@ MAX_SAMPLES = 1000
 SAMPLE_PERIOD = 1
 
 SYSTEM_PREFIXES = {
-    "wexac": "/home/pedro/wexac/",
-    "labs": "/home/labs/nyosef/pedro/",
-    "laptop": "/Volumes/pedro",
-}
+        "wexac": "/home/pedro/wexac/",
+        "labs": "/home/labs/nyosef/pedro/",
+        "laptop": "/Volumes/pedro",
+        }
 
 db = (
-    pl.read_csv('../parquet_db.txt', has_header=False)
-    .rename({'column_1':'full_path'})
-    .with_columns(pl.col('full_path').str.split("/").alias('split'))
-    .with_columns(name=pl.col('split').list.get(-3) +"::"+pl.col('split').list.get(-2))
-    .drop('split')
-    .sort('name')
-    )
+        pl.read_csv('../parquet_db.txt', has_header=False)
+        .rename({'column_1':'full_path'})
+        .with_columns(pl.col('full_path').str.split("/").alias('split'))
+        .with_columns(name=pl.col('split').list.get(-3) +"::"+pl.col('split').list.get(-2))
+        .drop('split')
+        .sort('name')
+        )
 
 db = {i:ii for i,ii in db.iter_rows()}
 
@@ -252,7 +252,7 @@ def format_sequence_with_highlights(seq_part, sequence_colors, line_length=60):
 
     return '<br>'.join(lines)
 
-def get_node_style(seq, sequence_colors, dark_mode):
+def get_node_style(seq, sequence_colors, dark_mode, path_nodes=None):
     """Determine node color and opacity based on sequence presence."""
     if not seq:
         return dict(color='rgba(0,0,0,0)', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
@@ -260,19 +260,29 @@ def get_node_style(seq, sequence_colors, dark_mode):
     # Clean up the sequence string
     seq = seq.strip('"').strip()
 
-    # Check for both sequences
+    # Check if node is in path but doesn't contain anchor sequences
+    if path_nodes is not None:
+        node_id = None
+        for part in seq.split('\n'):
+            if 'ID:' in part:
+                try:
+                    node_id = int(part.replace('ID:', '').strip())
+                    break
+                except ValueError:
+                    pass
+        
+        if node_id in path_nodes and not any(target_seq in seq for target_seq in sequence_colors.keys()):
+            return dict(color='#FFD700', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))  # Yellow
+
     has_both = all(target_seq in seq for target_seq in sequence_colors.keys())
     if has_both:
-        return dict(color='#FFA500', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))  # Orange color
+        return dict(color='#FFA500', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
 
-    # Check for individual sequences
     for target_seq, color in sequence_colors.items():
         if target_seq in seq:
             return dict(color=color, line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
 
-    # No matching sequence found - return transparent fill with border
     return dict(color='rgba(0,0,0,0)', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
-
 def extract_coverage(label):
     """Extract coverage value from node label."""
     if not label or not isinstance(label, str):
@@ -284,7 +294,7 @@ def extract_coverage(label):
     return None
 
 
-def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', debug=False):
+def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', debug=False, path_nodes=None):
     """Convert a DOT file to a Plotly figure with optimized layout settings.
     Nodes are sized according to their coverage values and disjoint subgraphs are separated.
 
@@ -306,15 +316,26 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
     from collections import defaultdict
 
     # Read and parse DOT file
+    path_file = dot_path.replace('.dot', '_path.dot')
+
+    if os.path.exists(path_file):
+        try:
+            path_graph = nx.drawing.nx_pydot.read_dot(path_file)
+            path_nodes = set(path_graph.nodes())
+        except Exception as e:
+            print(f"Error reading path file: {e}")
+
     try:
         graph = nx.drawing.nx_pydot.read_dot(dot_path)
 
         if len(graph.nodes()) == 0:
+            print(f"Loaded .dot file has no nodes {dot_path}")
             fig = go.Figure()
             fig.update_layout(
                     **dark_template['layout'],
-                    width=1000,
+                    #width=1000,
                     height=1000,
+                    autosize=True,
                     annotations=[dict(
                         text="Empty graph - no nodes found",
                         xref="paper",
@@ -332,8 +353,9 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         fig = go.Figure()
         fig.update_layout(
                 **dark_template['layout'],
-                width=1000,
+                # width=1000,
                 height=1000,
+                autosize=True,
                 annotations=[dict(
                     text=f"Error creating graph: {str(e)}",
                     xref="paper",
@@ -461,17 +483,17 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 hover_texts.append('<br>'.join(hover_text))
 
                 # Get node style based on sequence
-                node_style = get_node_style(seq_part, sequence_colors, dark_mode)
+                node_style = get_node_style(seq_part, sequence_colors, dark_mode, path_nodes=path_nodes)
                 node_colors.append(node_style['color'])
             else:
                 label = str(node)
                 hover_texts.append(f"Node: {node}")
-                node_style = get_node_style(None, sequence_colors, dark_mode)
+                node_style = get_node_style(seq_part, sequence_colors, dark_mode, path_nodes=path_nodes)
                 node_colors.append(node_style['color'])
         else:
             label = str(node)
             hover_texts.append(f"Node: {node}")
-            node_style = get_node_style(None, sequence_colors, dark_mode)
+            node_style = get_node_style(seq_part, sequence_colors, dark_mode, path_nodes=path_nodes)
             node_colors.append(node_style['color'])
 
         node_labels.append(label)
@@ -558,16 +580,16 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         showlegend=False
         ))
 
-    # Add legend for sequence colors
-    for seq, color in sequence_colors.items():
-        fig.add_trace(go.Scatter(
-            x=[None],
-            y=[None],
-            mode='markers',
-            marker=dict(size=10, color=color),
-            showlegend=True,
-            name=f'Sequence: {seq}'
-            ))
+    # # Add legend for sequence colors
+    # for seq, color in sequence_colors.items():
+    #     fig.add_trace(go.Scatter(
+    #         x=[None],
+    #         y=[None],
+    #         mode='markers',
+    #         marker=dict(size=10, color=color),
+    #         showlegend=True,
+    #         name=f'Sequence: {seq}'
+    #         ))
 
     # Layout settings
     bg_color = '#2d3339' if dark_mode else '#ffffff'
@@ -577,7 +599,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
     x_range = max(node_x) - min(node_x)
     y_range = max(node_y) - min(node_y)
 
-    padding = 0.3  # Increased padding to accommodate separated components
+    padding = 0.02
     x_min = min(node_x) - x_range * padding
     x_max = max(node_x) + x_range * padding
     y_min = min(node_y) - y_range * padding
@@ -596,8 +618,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 font=dict(color=text_color)
                 ),
             hovermode='closest',
-            height=1000,
-            width=1000,
+            # width=1000,
             margin=dict(b=40, l=20, r=20, t=40),
             annotations=[
                 dict(
@@ -615,8 +636,6 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 zeroline=False,
                 showticklabels=False,
                 range=[x_min, x_max],
-                scaleanchor="y",
-                scaleratio=1
                 ),
             yaxis=dict(
                 showgrid=False,
@@ -657,6 +676,14 @@ dark_template = dict(
         )
 
 app_ui = ui.page_fluid(
+        ui.tags.style("""
+        #shiny-notification-panel {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1050; /* Ensure it appears on top */
+        }
+    """),
         ui.h2("Contig Assembly Explorer"),
 
         # Layout with sidebar
@@ -668,16 +695,16 @@ app_ui = ui.page_fluid(
                     ui.HTML("GCTCGTATCCCGAAGCTAGG failed but overlaps<br>"),
                     ui.HTML("GATGCCTACCATCACTGTGG failed but overlaps<br>"),
                     ui.HTML("ATTGGCGGCACACTGTCCTG tricky <br>"),
-                   #---
-                   ui.input_numeric("insert_size", "Lineage reporter reference length (bp)", value=450),
-                   ui.input_numeric("sample_n_umis", "Number of UMIs to sample", value=100),
-              ui.input_checkbox(
-                  "sample_umis",
-                  "sub-sample UMIs?",
-                  value=True
-                  ),
-                   ui.input_numeric("sample_min_reads", "Minimum number of reads per umi", value=100),
-                   #---
+                    #---
+                    ui.input_numeric("insert_size", "Lineage reporter reference length (bp)", value=450),
+                    ui.input_numeric("sample_n_umis", "Number of UMIs to sample", value=100),
+                    ui.input_checkbox(
+                        "sample_umis",
+                        "sub-sample UMIs?",
+                        value=True
+                        ),
+                    ui.input_numeric("sample_min_reads", "Minimum number of reads per umi", value=100),
+                    #---
                     ui.hr(),
                     ui.h3("Data Input"),
                     ui.input_radio_buttons(
@@ -717,8 +744,8 @@ app_ui = ui.page_fluid(
                         ),
                     ),
                 ui.panel_well(
-                    ui.hr(),
-                    ),
+                        ui.hr(),
+                        ),
                 # ui.accordion(
                 #     ui.accordion_panel("CPU Monitor",
                 #                        ui.input_switch("cpu_hold", "Freeze Display", value=True),
@@ -734,133 +761,144 @@ app_ui = ui.page_fluid(
 
             # Main panel
             ui.navset_tab(
-                ui.nav_panel("Overview",
-                             ui.row(
-                                 ui.column(2,
-                                           ui.panel_well(
-                                               ui.h4("Summary Statistics"),
-                                               ui.p("Total UMIs: ", ui.output_text("total_umis")),
-                                               ui.p("Median Reads/UMI: ", ui.output_text("median_reads")),
-                                               ui.p("Read length: ", ui.output_text_verbatim("read_length"))
-                                               )
-                                           ),
-                                 ui.column(6,
-                                           ui.panel_well(
-                                               ui.h4("Selected UMI Stats"),
-                                               ui.output_text("selected_umi_stats")
-                                               )
-                                           )
-                                 ),
-                             ui.row(
-                                 ui.column(6, 
-                                           ui.panel_well(
-                                               output_widget("coverage_dist")  
-                                               )
-                                           ),
-                                 ui.column(6, 
-                                           ui.panel_well(
-                                               output_widget("reads_per_umi")
-                                               )
-                                           )
-                                 )
-                             ),
-                ui.nav_panel("Assembly Results",
-                             ui.row(
-                                 ui.column(6,
-                                           ui.panel_well(
-                                               ui.output_ui("assembly_stats"),
-                                               ui.h3("Contig Sequence"),
-                                               ui.output_text_verbatim("contig_sequence"),
-                                               ui.output_ui("top_contigs"),
-
+                    ui.nav_panel("Overview",
+                                 ui.row(
+                                     ui.column(2,
+                                               ui.panel_well(
+                                                   ui.h4("Summary Statistics"),
+                                                   ui.p("Total UMIs: ", ui.output_text("total_umis")),
+                                                   ui.p("Median Reads/UMI: ", ui.output_text("median_reads")),
+                                                   ui.p("Read length: ", ui.output_text_verbatim("read_length"))
+                                                   )
                                                ),
-                                           ),
+                                     ui.column(6,
+                                               ui.panel_well(
+                                                   ui.h4("Selected UMI Stats"),
+                                                   ui.output_text("selected_umi_stats")
+                                                   )
+                                               )
+                                     ),
+                                 ui.row(
+                                     ui.column(6, 
+                                               ui.panel_well(
+                                                   output_widget("coverage_dist")  
+                                                   )
+                                               ),
+                                     ui.column(6, 
+                                               ui.panel_well(
+                                                   output_widget("reads_per_umi")
+                                                   )
+                                               )
+                                     )
                                  ),
-                             ui.row(
-                                 ui.column(9,
-                                           ui.panel_well("Polished Contigs Stats",
-                                                         ui.h3("Contig Sequence"),
-                                                         ui.output_ui("top_contigs_polish"),
-                                                         ),
-                                           open=False,
-                                           ),
-                                 ),
-                             ui.row(
-                                 ui.column(3,
-                                           ui.panel_well(
-
-                                               ui.h3("Parameter Sweep"),
-                                               ui.input_slider(
-                                                   "k_start",
-                                                   "K-mer Range Start",
-                                                   min=1,
-                                                   max=20,
-                                                   value=1,
-                                                   step=1
+                    ui.nav_panel("Assembly Results",
+                                 ui.row(
+                                     ui.column(6,
+                                               ui.panel_well(
+                                                   ui.output_ui("assembly_stats"),
+                                                   ui.h3("Contig Sequence"),
+                                                   ui.output_text_verbatim("contig_sequence"),
+                                                   ui.output_ui("top_contigs"),
+                                                   ui.h3("Path Results"),
+                                                   ui.output_ui("path_results_output"),
+                                                   ui.input_text("top_path", "Top n paths", value=10, placeholder="How many paths to display (sorted byt coverage)"),
                                                    ),
+                                               ),
+                                     ),
+                                 ui.row(
+                                     ui.column(9,
+                                               ui.panel_well("Polished Contigs Stats",
+                                                             ui.h3("Contig Sequence"),
+                                                             ui.output_ui("top_contigs_polish"),
+                                                             ),
+                                               open=False,
+                                               ),
+                                     ),
+                                 ui.row(
+                                     ui.column(4,
+                                               ui.panel_well(
 
-                                               ui.input_slider(
-                                                   "k_end",
-                                                   "K-mer Range End",
-                                                   min=21,
-                                                   max=150,
-                                                   value=75,
-                                                   step=1
-                                                   ),
+                                                   ui.h3("Parameter Sweep"),
+                                                   ui.input_slider(
+                                                       "k_start",
+                                                       "K-mer Range Start",
+                                                       min=1,
+                                                       max=20,
+                                                       value=1,
+                                                       step=1
+                                                       ),
 
-                                               ui.input_slider(
-                                                   "cov_start",
-                                                   "Coverage Range Start",
-                                                   min=1,
-                                                   max=17,
-                                                   value=1
-                                                   ),
+                                                   ui.input_slider(
+                                                       "k_end",
+                                                       "K-mer Range End",
+                                                       min=21,
+                                                       max=64,
+                                                       value=64,
+                                                       step=1
+                                                       ),
 
-                                               ui.input_slider(
-                                                   "cov_end",
-                                                   "Coverage Range End",
-                                                   min=250,
-                                                   max=500,
-                                                   value=100
-                                                   ),
+                                                   ui.input_slider(
+                                                       "cov_start",
+                                                       "Coverage Range Start",
+                                                       min=1,
+                                                       max=17,
+                                                       value=1
+                                                       ),
 
-                                               ui.input_slider(
-                                                   "k_step",
-                                                   "K-mer step",
-                                                   min=1,
-                                                   max=20,
-                                                   value=1,
-                                                   step=1
-                                                   ),
+                                                   ui.input_slider(
+                                                       "cov_end",
+                                                       "Coverage Range End",
+                                                       min=250,
+                                                       max=500,
+                                                       value=100
+                                                       ),
 
-                                               #--
-                                               ui.input_action_button(
-                                                   "run_sweep",
-                                                   "Run Parameter Sweep",
-                                                   class_="btn-primary"
-                                                   ),
+                                                   ui.input_slider(
+                                                       "k_step",
+                                                       "K-mer step",
+                                                       min=1,
+                                                       max=20,
+                                                       value=1,
+                                                       step=1
+                                                       ),
+
+                                                   #--
+                                                   ui.input_action_button(
+                                                       "run_sweep",
+                                                       "Run Parameter Sweep",
+                                                       class_="btn-primary"
+                                                       ),
                                                ui.hr(),
                                         ),
                                            ),
-ui.column(1,
+ui.column(4,
           ui.panel_well(
-              ui.h4("Regular Assembly Parameters"),
+
+              ui.input_radio_buttons(
+                  "assembly_method",
+                  "Select Assembly Method",
+                  {
+                      "compression": "Graph Compression",
+                      "shortest_path": "Shortest Path"
+                      },
+                  selected="shortest_path"
+                  ),
+              ui.input_text("start_anchor", "Start Anchor", value="GAGACTGCATGG", placeholder="Sequence at the 5' end"),
+              ui.input_text("end_anchor", "End Anchor", value="TTTAGTGAGGGT", placeholder="Sequence at the 3' end"),
               ui.input_selectize(
                   "umi", 
                   "Select UMI",
                   choices=[]
                   ),
-              ui.input_text(
+              ui.input_numeric(
                   "min_coverage",
                   "Minimum Coverage",
                   value=17,
-                  placeholder=17
                   ),
-              ui.input_text(
+              ui.input_numeric(
                   "kmer_size", 
                   "K-mer Size", 
                   value=17,
-                  placeholder=17
                   ),
               ui.input_checkbox(
                   "auto_k",
@@ -874,20 +912,18 @@ ui.column(1,
                   )
               )
           ),
-ui.column(1,
+ui.column(4,
           ui.panel_well(
               ui.h4("Polish Assembly Parameters"),
-              ui.input_text(
+              ui.input_numeric(
                   "polish_min_coverage",
                   "Polish Minimum Coverage",
                   value=1,
-                  placeholder=1
                   ),
-              ui.input_text(
+              ui.input_numeric(
                   "polish_kmer_size", 
                   "Polish K-mer Size", 
                   value=8,
-                  placeholder=8
                   ),
               ui.input_checkbox(
                   "polish_auto_k",
@@ -903,13 +939,13 @@ ui.column(1,
           ),
 ),
                     ui.row(
-                            ui.column(3,
+                            ui.column(4,
                                       ui.panel_well(
                                           ui.h4("K-mer vs Coverage Sweep"),
                                           ui.div(output_widget("sweep_heatmap"), style="height: 500px;"),
                                           )
                                       ),
-                            ui.column(3,
+                            ui.column(4,
                                       ui.panel_well(
                                           ui.h4("Assembly Graph"),
                                           ui.panel_well(
@@ -928,11 +964,12 @@ ui.column(1,
                                                   value=False
                                                   ),
                                               ),
-                                          ui.div(output_widget("assembly_graph"), style="height: 1000px;"),
+                                          # output_widget("assembly_graph")
+                                          ui.div(output_widget("assembly_graph"), style="min-height: 1000px; height: auto; width: 100%")
                                           )
 
                                       ),
-                            ui.column(3,
+                            ui.column(4,
                                       ui.h4("Coverage Plot (from uniqued reads!!)"),
                                       ui.div(output_widget("coverage_plot"), style="height: 500px;"),
                                       ),
@@ -963,6 +1000,7 @@ def server(input, output, session):
     data = reactive.Value(None)
     assembly_result = reactive.Value(None)
     sweep_results = reactive.Value(None)
+    path_results = reactive.Value(None)
 
     #ncpu = cpu_count(logical=True)
     #cpu_history = reactive.Value(None)
@@ -1063,22 +1101,22 @@ def server(input, output, session):
     @reactive.event(input.parquet_file_local, input.parquet_file, input.remote_path, input.input_type, input.system_prefix, input.sample_n_umis, input.sample_min_reads, input.sample_umis)
 
     def load_data():
-        try:
-            ui.update_selectize("umi", choices=[], selected=None)
-            sweep_results.set(None)
-            assembly_result.set(None)
+        with reactive.isolate():
             data.set(None)
+            sweep_results.set(None) 
+            assembly_result.set(None)
+        ui.update_selectize("umi", choices=[], selected=None)
 
+        try:
             if input.input_type() == "upload" and input.parquet_file() is not None:
                 file_path = input.parquet_file()[0]["datapath"]
             elif input.input_type() == "local" and input.parquet_file_local() is not None:
                 file_path = input.parquet_file_local()
-
             elif input.input_type() == "remote" and input.remote_path:
                 prefix = SYSTEM_PREFIXES[input.system_prefix()]
                 file_path = prefix + input.remote_path()
             else:
-                data.set(None)
+                ui.notification_show(f"no valid input choices", type='error')     
                 return
 
             if not Path(file_path).exists():
@@ -1087,9 +1125,10 @@ def server(input, output, session):
                         type="error"
                         )
                 return
+
             ui.notification_show(f"loading from {input.input_type()}")     
             ui.notification_show(f"loading from {file_path}")     
-            
+
             if input.sample_umis():
                 df =(
                         pl.scan_parquet(file_path)
@@ -1099,6 +1138,15 @@ def server(input, output, session):
                             )	
                         .collect(streaming=True)
                         )
+
+                ui.notification_show(f"finished loading from {file_path}")     
+
+                if df.shape[0] == 0:
+                    ui.notification_show(
+                            f"No UMIs found with at least {input.sample_min_reads()}",
+                            type="error"
+                            )
+                    return
             else:
                 df = pl.read_parquet(file_path)
 
@@ -1113,13 +1161,11 @@ def server(input, output, session):
                     )
 
         except Exception as e:
-            data.set(None)
-            ui.update_selectize("umi", choices=[], selected=None)
-
-            ui.notification_show(
-                    f"Error loading data: {str(e)}",
-                    type="error"
-                    )
+            with reactive.isolate():
+                data.set(None)
+                sweep_results.set(None)
+                assembly_result.set(None)
+            ui.notification_show(f"Error loading data: {str(e)}", type="error")
 
     @output
     @render.text
@@ -1147,14 +1193,15 @@ def server(input, output, session):
     def selected_umi_stats():
         if data() is None or not input.umi():
             return "No UMI selected"
-
-        df = data()
-        umi_reads = df.filter(pl.col('umi') == input.umi()).height
-
-        return f"""
-        Selected UMI: {input.umi()}\n
-        Number of reads: {umi_reads}
-        """
+        if not input.umi() or input.umi() not in data()['umi'].unique():
+            return "No valid UMI selected"
+        try:
+            df = data()
+            umi_reads = df.filter(pl.col('umi') == input.umi()).height
+            return f"Selected UMI: {input.umi()}\nNumber of reads: {umi_reads}"
+        except Exception as e:
+            print(f"Error in selected_umi_stats: {e}")  # Log error
+            return "Error calculating UMI stats"
 
     @output
     @render_plotly
@@ -1240,12 +1287,15 @@ def server(input, output, session):
                         target_umi=input.umi(),
                         k=int(input.kmer_size()),
                         min_cov=int(input.min_coverage()),
+                        method=input.assembly_method(),
                         auto_k=input.auto_k(),
                         export_graphs=True,
                         only_largest=True,
-                        intbc_5prime='GAGACTGCATGG'
+                        start_anchor=input.start_anchor(),
+                        end_anchor=input.end_anchor(),
                         )
                     )
+            print(result)
             handle_assembly_result(result)
         except Exception as e:
             ui.notification_show(f"Error in regular assembly: {str(e)}", type="error")
@@ -1263,7 +1313,7 @@ def server(input, output, session):
             print(f"will polish contigs from {graph_path}")
 
             if not Path(graph_path).exists():
-                ui.notification_show("Condensed graph data not found", type="error")
+                ui.notification_show("Compressed graph data not found", type="error")
                 return
 
             polish_umi = f'polish_{input.umi()}'
@@ -1272,11 +1322,11 @@ def server(input, output, session):
                     .with_columns(pl.col('sequence').str.len_chars().alias('length'))
                     .sort('coverage', 'length',  descending=True)
                     .select('node_id', 'sequence', 'coverage', 'length')
-                    .head(5)
                     .with_columns(umi=pl.lit(polish_umi))
                     .rename({'sequence':'r2_seq'})
                     )
-            print(df)
+            pl.Config().set_tbl_width_chars(100)
+
 
             result = df.pp.assemble_umi(target_umi=polish_umi,
                                         k=int(input.kmer_size()),
@@ -1286,6 +1336,7 @@ def server(input, output, session):
                                         only_largest=True,
                                         intbc_5prime='GAGACTGCATGG'
                                         )
+
 
             handle_assembly_result(result)
         except Exception as e:
@@ -1297,6 +1348,28 @@ def server(input, output, session):
             if len(result) > 0:
                 contig = result.get_column('contig')[0]
                 assembly_result.set(contig)
+
+                # Read path results if they exist
+                if input.assembly_method() == "shortest_path":
+                    base_path = f"{Path(__file__).parent}/{input.umi()}"
+                    path_file = f"{base_path}__path.csv"
+
+                    if Path(path_file).exists():
+                        print(f'Loading path file {path_file} ... ')
+                        path_df = (pl.read_csv(path_file)
+                                   .with_columns(pl.col('sequence').str.len_chars().alias('length'))
+                                   .sort('coverage', 'length', descending=True))
+                        # path_df will be needed for adding decorate to nodes in the graph plot
+                        # but assembly_results are to ones proccessed by path_results_output for display
+                        print(result)
+                        path_results.set({
+                            'results':result,
+                            'path_nodes': path_df['node_id'].to_list(),
+                            })
+                    else:
+                        path_results.set(None)
+
+
                 ui.notification_show(
                         f"Assembly completed successfully! Contig length: {len(contig)}",
                         type="message"
@@ -1304,8 +1377,39 @@ def server(input, output, session):
             else:
                 ui.notification_show("Assembly produced no contigs", type="warning")
                 assembly_result.set(None)
+                path_results.set(None)
         except Exception as e:
             ui.notification_show(f"Error handling assembly result: {str(e)}", type="error")
+
+    @output
+    @render.text
+    @reactive.event(input.top_path)  
+    def path_results_output():
+        if path_results() is None:
+            return ""
+        
+
+        head_n_paths = 5 if input.top_path() == '' else int(input.top_path())
+
+        df = (
+                path_results()['results']
+                .with_columns(pl.col('contig').str.len_chars().alias('Length'))
+                .with_columns(
+                    coverage=pl.lit(100), # change the average path weight or similar
+                    note_type=pl.lit('_terminal'),
+                    outgoing_nodes=pl.lit(100),
+                    outgoing_directions=pl.lit('Left'),
+                    )
+                .rename({'umi':'node_id', 'contig':'sequence'})
+                .head(head_n_paths)
+                )
+
+        if df.shape[0] == 0:
+            return "No path results available"
+
+        pl.Config().set_tbl_width_chars(df.get_column('Length').max()+1)
+        return ui.HTML(format_top_contigs_table(df))
+
     @output
     @render.text
     def assembly_stats():
@@ -1315,6 +1419,7 @@ def server(input, output, session):
         read_count = data().filter(pl.col('umi') == input.umi()).height
         return ui.HTML(f"""
     Target UMI: <h4>{input.umi()}</h4>
+    Assembly Method: {input.assembly_method()}
     Contig Length: <span style="color: #ff8080;">{len(assembly_result())}</span> 
     Input Reads: <span style="color: #ffffff;">{read_count}</span> 
     K-mer Size: <span style="color: #ffa07a;">{input.kmer_size()}</span> 
@@ -1375,7 +1480,8 @@ def server(input, output, session):
                     .head(5)
                     )
 
-            pl.Config().set_tbl_width_chars(df.get_column('length').max()+1)
+            if not df.shape[0] == 0:
+                pl.Config().set_tbl_width_chars(df.get_column('length').max()+1)
 
             return ui.HTML(format_top_contigs_table(df))
 
@@ -1395,7 +1501,9 @@ def server(input, output, session):
                 return
 
             df = data()
-            filtered_df = df.filter(pl.col('umi') == input.umi())
+            filtered_df = (
+                    df.filter(pl.col('umi') == input.umi())
+                    )
 
             ui.notification_show(
                     "Running parameter sweep...",
@@ -1405,6 +1513,7 @@ def server(input, output, session):
             # Run sweep using the API
             result = (
                     filtered_df
+
                     .pp.assemble_sweep_params_umi(
                         target_umi=input.umi(),
                         k_start=input.k_start(),
@@ -1449,8 +1558,8 @@ def server(input, output, session):
         if data() is None or not input.umi() or input.umi() not in data()['umi']:
             empty_fig = go.Figure(layout=dark_template['layout'])
             empty_fig.update_layout(
-                    width=1000,
                     height=500,
+                    autosize=True,
                     annotations=[dict(
                         text="No data available",
                         xref="paper",
@@ -1481,7 +1590,6 @@ def server(input, output, session):
                     y="Reads",
                     ),
                 title="Coverage of raw reads",
-                width=1000,
                 height=500,
                 )
 
@@ -1489,6 +1597,7 @@ def server(input, output, session):
                 **dark_template['layout'],
                 xaxis_title="Minimum Coverage",
                 yaxis_title="K-mer Size",
+                autosize=True,
                 )
 
         # Ensure axis labels are visible
@@ -1504,8 +1613,8 @@ def server(input, output, session):
             # Create empty figure with specific dimensions
             empty_fig = go.Figure(layout=dark_template['layout'])
             empty_fig.update_layout(
-                    width=1000,
                     height=500, 
+                    autosize=True,
                     # Optional: Add a message indicating no data
                     annotations=[dict(
                         text="No sweep results available",
@@ -1527,7 +1636,6 @@ def server(input, output, session):
                     color="Contig Length"
                     ),
                 title="K-mer Size vs Coverage Parameter Sweep",
-                width=1000,
                 height=500,
                 color_continuous_scale="RdYlBu_r",
                 zmax=input.insert_size()*1.05,
@@ -1536,6 +1644,7 @@ def server(input, output, session):
                 )
 
         fig.update_layout(
+                autosize=True,
                 **dark_template['layout'],
                 xaxis_title="Minimum Coverage",
                 yaxis_title="K-mer Size",
@@ -1554,8 +1663,10 @@ def server(input, output, session):
         if assembly_result() is None:
             empty_fig = go.Figure(layout=dark_template['layout'])
             empty_fig.update_layout(
-                    width=1000,
+                    #width=1000,
                     height=1000,
+                    autosize=True,
+
                     annotations=[dict(
                         text="No assembly graph available",
                         xref="paper",
@@ -1584,8 +1695,9 @@ def server(input, output, session):
             print(f"Graph file not found: {graph_path}")  # Debug print
             empty_fig = go.Figure(layout=dark_template['layout'])
             empty_fig.update_layout(
-                    width=1000,
+                    #width=1000,
                     height=1000,
+                    autosize=True,
                     annotations=[dict(
                         text=f"Graph file not found: {graph_path}",
                         xref="paper",
@@ -1598,17 +1710,24 @@ def server(input, output, session):
                     )
             return empty_fig        
 
+        path_nodes = None
+        if path_results() is not None and isinstance(path_results(), dict):
+            path_nodes = path_results().get('path_nodes')
+
         # Create graph visualization
         fig = create_graph_plot(
                 graph_path, 
                 dark_mode=True,
                 line_shape='linear',  # Since we removed line_shape selector
-                graph_type=input.graph_type()
+                graph_type=input.graph_type(),
+                path_nodes= path_nodes,
+
                 )
 
         if fig is None:
             fig = go.Figure()
             fig.update_layout(
+                    autosize=True,
                     **dark_template['layout'],
                     annotations=[dict(
                         text="Error loading assembly graph",
@@ -1623,7 +1742,23 @@ def server(input, output, session):
 
         # Add debug information to layout
         fig.update_layout(
-                title=f"Graph: {graph_path}<br>Polished: {input.use_polished()}"
+                #title=f"Graph: {graph_path}<br>Polished: {input.use_polished()}",
+                annotations=[
+                    dict(
+                        text=f"Graph: {graph_path}<br>Polished: {input.use_polished()}",
+                        xref="paper",
+                        yref="paper",
+                        x=0.5,
+                        y=0,  # Position below the plot (-0.1 for some spacing)
+                        showarrow=False,
+                        font=dict(size=10, color='#ffffff'),
+                        xanchor='center',
+                        yanchor='top'
+                        )
+                    ],
+                margin=dict(b=60),  # Increase bottom margin to accommodate the text
+                autosize=True,
+                height=1000,
                 )
 
         return fig
