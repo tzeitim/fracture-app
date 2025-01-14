@@ -252,180 +252,100 @@ def format_sequence_with_highlights(seq_part, sequence_colors, line_length=60):
 
     return '<br>'.join(lines)
 
-def get_node_style(seq, sequence_colors, dark_mode, path_nodes=None):
-    """Determine node color and opacity based on sequence presence."""
+def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=None):
+    """
+    Determine node style including color and line properties based on node properties.
+    
+    Args:
+        seq: The sequence to check for anchor sequences
+        sequence_colors: Dict mapping anchor sequences to their colors
+        dark_mode: Boolean indicating if dark mode is enabled
+        node_id: The ID of the node (used for path checking)
+        path_nodes: Set/list of node IDs that are part of the path
+    
+    Returns:
+        dict: Style properties for the node
+    """
+    # Default style for empty/invalid sequences
     if not seq:
-        return dict(color='rgba(0,0,0,0)', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
+        return dict(
+            color='rgba(0,0,0,0)', 
+            line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+        )
 
-    # Clean up the sequence string
+    # Clean up sequence string
     seq = seq.strip('"').strip()
-
-    # Check if node is in path but doesn't contain anchor sequences
-    if path_nodes is not None:
-        node_id = None
-        for part in seq.split('\n'):
-            if 'ID:' in part:
-                try:
-                    node_id = int(part.replace('ID:', '').strip())
-                    break
-                except ValueError:
-                    pass
-        
-        if node_id in path_nodes and not any(target_seq in seq for target_seq in sequence_colors.keys()):
-            return dict(color='#FFD700', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))  # Yellow
-
+    
+    # Priority 1: Check if node is in path but doesn't contain anchor sequences
+    if path_nodes is not None and node_id is not None and node_id in path_nodes:
+        if not any(target_seq in seq for target_seq in sequence_colors.keys()):
+            return dict(
+                color='rgba(255, 215, 0, 0.15)', # yellow 30 alpha
+                line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+            )
+    
+    # Priority 2: Check for presence of both anchor sequences
     has_both = all(target_seq in seq for target_seq in sequence_colors.keys())
     if has_both:
-        return dict(color='#FFA500', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
-
+        return dict(
+            color='#FFA500',  # Orange for nodes with both anchors
+            line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+        )
+    
+    # Priority 3: Check for individual anchor sequences
     for target_seq, color in sequence_colors.items():
         if target_seq in seq:
-            return dict(color=color, line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
-
-    return dict(color='rgba(0,0,0,0)', line=dict(color='#4f5b66' if dark_mode else '#888', width=2))
-def extract_coverage(label):
-    """Extract coverage value from node label."""
-    if not label or not isinstance(label, str):
-        return None
-    import re 
-    match = re.search(r'cov:\s*(\d+)', label)
-    if match:
-        return int(match.group(1))
-    return None
-
-
+            return dict(
+                color=color,
+                line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+            )
+    
+    # Default style for nodes without special properties
+    return dict(
+        color='rgba(0,0,0,0)',
+        line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+    )
 def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', debug=False, path_nodes=None):
-    """Convert a DOT file to a Plotly figure with optimized layout settings.
-    Nodes are sized according to their coverage values and disjoint subgraphs are separated.
-
+    """Create an interactive plot of the assembly graph.
+    
     Args:
         dot_path (str): Path to the DOT file
         dark_mode (bool): Whether to use dark theme colors
         line_shape (str): Shape of edges ('linear' or 'spline')
         graph_type (str): Type of graph visualization
         debug (bool): Whether to print debug information
-
-    Returns:
-        go.Figure: Plotly figure object
+        path_nodes (list/set): Node IDs that are part of the path
     """
     import networkx as nx
     from graphviz import Source
     import plotly.graph_objects as go
-    import re
     import html
-    from collections import defaultdict
-
-    # Read and parse DOT file
-    path_file = dot_path.replace('.dot', '_path.dot')
-
-    if os.path.exists(path_file):
-        try:
-            path_graph = nx.drawing.nx_pydot.read_dot(path_file)
-            path_nodes = set(path_graph.nodes())
-        except Exception as e:
-            print(f"Error reading path file: {e}")
-
+    
+    # Define sequences and their colors
+    sequence_colors = {
+        'GAGACTGCATGG': '#50C878',  # Emerald green
+        'TTTAGTGAGGGT': '#9370DB'   # Medium purple
+    }
+    
     try:
         graph = nx.drawing.nx_pydot.read_dot(dot_path)
-
         if len(graph.nodes()) == 0:
-            print(f"Loaded .dot file has no nodes {dot_path}")
-            fig = go.Figure()
-            fig.update_layout(
-                    **dark_template['layout'],
-                    #width=1000,
-                    height=1000,
-                    autosize=True,
-                    annotations=[dict(
-                        text="Empty graph - no nodes found",
-                        xref="paper",
-                        yref="paper",
-                        x=0.5,
-                        y=0.5,
-                        showarrow=False,
-                        font=dict(color='#ffffff', size=14)
-                        )]
-                    )
-            return fig
-
+            return create_empty_figure("Empty graph - no nodes found")
     except Exception as e:
-        print(f"Error in create_graph_plot: {str(e)}")
-        fig = go.Figure()
-        fig.update_layout(
-                **dark_template['layout'],
-                # width=1000,
-                height=1000,
-                autosize=True,
-                annotations=[dict(
-                    text=f"Error creating graph: {str(e)}",
-                    xref="paper",
-                    yref="paper",
-                    x=0.5,
-                    y=0.5,
-                    showarrow=False,
-                    font=dict(color='#ffffff', size=14)
-                    )]
-                )
-        return fig
+        return create_empty_figure(f"Error creating graph: {str(e)}")
 
-
-    # Find connected components (disjoint subgraphs)
-    components = list(nx.connected_components(graph.to_undirected()))
-
-    # Calculate layout for each component separately and then adjust positions
-    all_pos = {}
-    component_centers = []
-    spacing = 3.0  # Increase spacing between components
-
-    for i, component in enumerate(components):
-        # Create subgraph for this component
-        subgraph = graph.subgraph(component)
-
-        # Calculate layout for this component
-        subgraph_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
-
-        # Find center of this component
-        center_x = sum(pos[0] for pos in subgraph_pos.values()) / len(subgraph_pos)
-        center_y = sum(pos[1] for pos in subgraph_pos.values()) / len(subgraph_pos)
-        component_centers.append((center_x, center_y))
-
-        # Store positions for this component's nodes
-        all_pos.update(subgraph_pos)
-
-    # Adjust component positions to prevent overlap
-    if len(components) > 1:
-        for i, component in enumerate(components):
-            # Calculate offset for this component
-            offset_x = (i % 2) * spacing
-            offset_y = (i // 2) * spacing
-
-            # Apply offset to all nodes in this component
-            for node in component:
-                all_pos[node] = (
-                        all_pos[node][0] + offset_x,
-                        all_pos[node][1] + offset_y
-                        )
-
-    pos = all_pos  # Use the adjusted positions
-
-    # Extract node attributes
-    node_x = []
-    node_y = []
+    # Calculate layout
+    pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+    
+    # Extract node information
+    node_x, node_y = [], []
     node_labels = []
     node_colors = []
     node_sizes = []
     hover_texts = []
-
-    # Track min/max coverage for scaling
     coverages = []
 
-    # Define sequences and their corresponding colors
-    sequence_colors = {
-            'GAGACTGCATGG': '#50C878',  # Emerald green for theme
-            'TTTAGTGAGGGT': '#9370DB'   # Medium purple for theme
-            }
-
-    # First pass to collect coverage values
+    # First pass to collect coverage values for scaling
     for node in graph.nodes():
         attrs = graph.nodes[node]
         label = attrs.get('label', '')
@@ -440,85 +360,145 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
     min_size = 10
     max_size = 60
 
+    # Second pass to build node properties
     for node in graph.nodes():
         x, y = pos[node]
         node_x.append(x)
         node_y.append(y)
 
         attrs = graph.nodes[node]
-        label = attrs.get('label', node)
-
+        label = attrs.get('label', '')
+        
         if isinstance(label, str):
-            # Handle both escaped and unescaped newlines
+            # Parse node label
             label = label.strip('"').replace('\\\\n', '\n').replace('\\n', '\n')
-            parts = label.split('\n')
-
-            # Extract ID, sequence, and coverage
-            id_part = ''
-            seq_part = ''
-            cov_part = ''
-
-            for part in parts:
-                if 'ID:' in part:
-                    id_part = part.replace('ID:', '').strip()
-                elif 'Seq:' in part:
-                    seq_part = part.replace('Seq:', '').strip()
-                elif 'cov:' in part:
-                    cov_part = part.replace('cov:', '').strip()
-
-            if id_part and seq_part:
-                label = ""
-
-                # Create hover text with proper indentation
-                hover_text = []
-                if id_part:
-                    hover_text.append(f"<b>ID:</b> {html.escape(id_part)}")
-                if seq_part:
-                    # Use the formatter that handles cross-line highlights
-                    highlighted_seq = format_sequence_with_highlights(seq_part, sequence_colors)
-                    hover_text.append(f"<b>Sequence:</b><br>{highlighted_seq}")
-                if cov_part:
-                    hover_text.append(f"<b>Coverage:</b> {html.escape(cov_part)}")
-
-                hover_texts.append('<br>'.join(hover_text))
-
-                # Get node style based on sequence
-                node_style = get_node_style(seq_part, sequence_colors, dark_mode, path_nodes=path_nodes)
-                node_colors.append(node_style['color'])
-            else:
-                label = str(node)
-                hover_texts.append(f"Node: {node}")
-                node_style = get_node_style(seq_part, sequence_colors, dark_mode, path_nodes=path_nodes)
-                node_colors.append(node_style['color'])
-        else:
-            label = str(node)
-            hover_texts.append(f"Node: {node}")
-            node_style = get_node_style(seq_part, sequence_colors, dark_mode, path_nodes=path_nodes)
+            id_part, seq_part, cov_part = parse_node_label(label)
+            
+            # Build hover text
+            hover_text = build_hover_text(id_part, seq_part, cov_part, sequence_colors)
+            hover_texts.append(hover_text)
+            
+            # Get node style
+            node_style = get_node_style(seq_part, sequence_colors, dark_mode, 
+                                      node_id=seq_part, path_nodes=path_nodes)
             node_colors.append(node_style['color'])
-
-        node_labels.append(label)
-
-        # Calculate node size based on coverage
-        coverage = extract_coverage(attrs.get('label', ''))
-        if coverage is not None and max_coverage > min_coverage:
-            size = min_size + (max_size - min_size) * (coverage - min_coverage) / (max_coverage - min_coverage)
+            
+            # Calculate node size
+            coverage = extract_coverage(label)
+            if coverage is not None and max_coverage > min_coverage:
+                size = min_size + (max_size - min_size) * (coverage - min_coverage) / (max_coverage - min_coverage)
+            else:
+                size = min_size
+            node_sizes.append(size)
+            
+            node_labels.append("")  # Empty label since we're using hover text
         else:
-            size = min_size
-        node_sizes.append(size)
+            hover_texts.append(f"Node: {node}")
+            node_colors.append('rgba(0,0,0,0)')
+            node_sizes.append(min_size)
+            node_labels.append(str(node))
 
     # Create edges
-    edge_x = []
-    edge_y = []
-    edge_texts = []
+    edge_x, edge_y, edge_texts = create_edges(graph, pos, line_shape)
 
+    # Create figure
+    fig = go.Figure()
+
+    # Add edges
+    fig.add_trace(go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=1.5, color='#4f5b66' if dark_mode else '#888', shape=line_shape),
+        hoverinfo='text',
+        hovertext=edge_texts,
+        mode='lines',
+        showlegend=False
+    ))
+
+    # Add nodes
+    node_marker = dict(
+        showscale=False,
+        color=node_colors,
+        size=node_sizes,
+        line=dict(width=1, color='#4f5b66' if dark_mode else '#888'),
+        symbol='circle'
+    )
+
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers',
+        hoverinfo='text',
+        hovertext=hover_texts,
+        text=node_labels,
+        textposition="bottom center",
+        textfont=dict(size=12),
+        marker=node_marker,
+        showlegend=False
+    ))
+
+    # Update layout
+    update_figure_layout(fig, dark_mode, node_x, node_y)
+    
+    return fig
+
+def create_empty_figure(message):
+    """Create an empty figure with a message."""
+    fig = go.Figure()
+    fig.update_layout(
+        height=1000,
+        autosize=True,
+        annotations=[dict(
+            text=message,
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font=dict(color='#ffffff', size=14)
+        )]
+    )
+    return fig
+
+def parse_node_label(label):
+    """Parse node label into components."""
+    id_part = ''
+    seq_part = ''
+    cov_part = ''
+    
+    for part in label.split('\n'):
+        if 'ID:' in part:
+            id_part = part.replace('ID:', '').strip()
+        elif 'Seq:' in part:
+            seq_part = part.replace('Seq:', '').strip()
+        elif 'cov:' in part:
+            cov_part = part.replace('cov:', '').strip()
+            
+    return id_part, seq_part, cov_part
+
+def build_hover_text(id_part, seq_part, cov_part, sequence_colors):
+    """Build hover text with proper formatting."""
+    hover_text = []
+    if id_part:
+        hover_text.append(f"<b>ID:</b> {html.escape(id_part)}")
+    if seq_part:
+        highlighted_seq = format_sequence_with_highlights(seq_part, sequence_colors)
+        hover_text.append(f"<b>Sequence:</b><br>{highlighted_seq}")
+    if cov_part:
+        hover_text.append(f"<b>Coverage:</b> {html.escape(cov_part)}")
+    return '<br>'.join(hover_text)
+
+def create_edges(graph, pos, line_shape):
+    """Create edge traces for the graph."""
+    edge_x, edge_y, edge_texts = [], [], []
+    
     for u, v in graph.edges():
         x0, y0 = pos[u]
         x1, y1 = pos[v]
-
+        
         if line_shape == 'linear':
             edge_x.extend([x0, x1, None])
             edge_y.extend([y0, y1, None])
         else:
+            # Add curved edges
             mid_x = (x0 + x1) / 2
             mid_y = (y0 + y1) / 2
             offset = 0.05
@@ -528,7 +508,8 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 mid_x += offset
             edge_x.extend([x0, mid_x, x1, None])
             edge_y.extend([y0, mid_y, y1, None])
-
+            
+        # Add edge label
         try:
             edge_data = graph.get_edge_data(u, v)
             label = edge_data.get('label', '') if edge_data else ''
@@ -536,124 +517,162 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 label = label.strip('"')
             edge_texts.append(f"<b>{u} → {v}</b><br>{label}" if label else f"<b>{u} → {v}</b>")
         except Exception as e:
-            print(f"Error processing edge {u}-{v}: {e}")
             edge_texts.append(f"<b>{u} → {v}</b>")
+            
+    return edge_x, edge_y, edge_texts
 
-    # Create figure
-    fig = go.Figure()
-
-    # Add edges
-    fig.add_trace(go.Scatter(
-        x=edge_x, y=edge_y,
-        line=dict(
-            width=1.5,
-            color='#4f5b66' if dark_mode else '#888',
-            shape=line_shape
-            ),
-        hoverinfo='text',
-        hovertext=edge_texts,
-        mode='lines',
-        showlegend=False
-        ))
-
-    # Add nodes
-    node_marker = dict(
-            showscale=False,
-            color=node_colors,
-            size=node_sizes,
-            line=dict(
-                width=2,
-                color='#4f5b66' if dark_mode else '#888'
-                ),
-            symbol='circle'
-            )
-
-    fig.add_trace(go.Scatter(
-        x=node_x, y=node_y,
-        mode='markers+text',
-        hoverinfo='text',
-        hovertext=hover_texts,
-        text=node_labels,
-        textposition="bottom center",
-        textfont=dict(size=12),
-        marker=node_marker,
-        showlegend=False
-        ))
-
-    # # Add legend for sequence colors
-    # for seq, color in sequence_colors.items():
-    #     fig.add_trace(go.Scatter(
-    #         x=[None],
-    #         y=[None],
-    #         mode='markers',
-    #         marker=dict(size=10, color=color),
-    #         showlegend=True,
-    #         name=f'Sequence: {seq}'
-    #         ))
-
-    # Layout settings
+def update_figure_layout(fig, dark_mode, node_x, node_y):
+    """Update the figure layout with proper styling."""
     bg_color = '#2d3339' if dark_mode else '#ffffff'
     text_color = '#ffffff' if dark_mode else '#000000'
-
-    # Calculate padding based on component spread
+    
+    # Calculate padding and ranges
     x_range = max(node_x) - min(node_x)
     y_range = max(node_y) - min(node_y)
-
     padding = 0.02
-    x_min = min(node_x) - x_range * padding
-    x_max = max(node_x) + x_range * padding
-    y_min = min(node_y) - y_range * padding
-    y_max = max(node_y) + y_range * padding
-
+    
     fig.update_layout(
-            showlegend=True,
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="right",
-                x=0.99,
-                bgcolor=bg_color,
-                bordercolor=text_color,
-                borderwidth=1,
-                font=dict(color=text_color)
-                ),
-            hovermode='closest',
-            # width=1000,
-            margin=dict(b=40, l=20, r=20, t=40),
-            annotations=[
-                dict(
-                    text="Assembly Graph",
-                    showarrow=False,
-                    xref="paper", 
-                    yref="paper",
-                    x=0.5, 
-                    y=1.02,
-                    font=dict(size=16, color=text_color)
-                    )
-                ],
-            xaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-                range=[x_min, x_max],
-                ),
-            yaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-                range=[y_min, y_max]
-                ),
-            plot_bgcolor=bg_color,
-            paper_bgcolor=bg_color,
-            font_color=text_color,
-            hoverlabel=dict(
-                bgcolor=bg_color,
-                font_size=14,
-                font_color=text_color
-                )
-            )
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            bgcolor=bg_color,
+            bordercolor=text_color,
+            borderwidth=1,
+            font=dict(color=text_color)
+        ),
+        hovermode='closest',
+        margin=dict(b=40, l=20, r=20, t=40),
+        annotations=[dict(
+            text="Assembly Graph",
+            showarrow=False,
+            xref="paper", 
+            yref="paper",
+            x=0.5, 
+            y=1.02,
+            font=dict(size=16, color=text_color)
+        )],
+        xaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            range=[min(node_x) - x_range * padding, max(node_x) + x_range * padding]
+        ),
+        yaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            range=[min(node_y) - y_range * padding, max(node_y) + y_range * padding]
+        ),
+        plot_bgcolor=bg_color,
+        paper_bgcolor=bg_color,
+        font_color=text_color,
+        hoverlabel=dict(
+            bgcolor=bg_color,
+            font_size=14,
+            font_color=text_color
+        )
+    )
+def extract_coverage(label):
+    """Extract coverage value from node label.
+    
+    Args:
+        label (str): Node label text
+        
+    Returns:
+        int or None: Coverage value if found, None otherwise
+    """
+    if not label or not isinstance(label, str):
+        return None
+        
+    # Handle both 'cov: X' and just the label containing coverage
+    import re
+    match = re.search(r'cov:\s*(\d+)', label)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
 
-    return fig
+def format_sequence_with_highlights(seq_part, sequence_colors, line_length=60):
+    """Format sequence with highlights, properly handling HTML tags.
+    
+    Args:
+        seq_part (str): Sequence to format
+        sequence_colors (dict): Mapping of sequences to their highlight colors
+        line_length (int): Maximum length for each line
+        
+    Returns:
+        str: Formatted HTML string with highlights
+    """
+    import html
+    
+    # First escape any HTML in the original text
+    escaped_text = html.escape(seq_part)
+    
+    # Find all sequences to highlight and their positions
+    replacements = []
+    for seq, color in sequence_colors.items():
+        start = 0
+        while True:
+            pos = escaped_text.find(seq, start)
+            if pos == -1:
+                break
+            replacements.append((
+                pos,
+                pos + len(seq),
+                f'<span style="color: {color}">{seq}</span>'
+            ))
+            start = pos + 1
+    
+    # Sort replacements in reverse order to avoid position shifts
+    replacements.sort(key=lambda x: x[0], reverse=True)
+    
+    # Apply replacements
+    result = escaped_text
+    for start, end, html_span in replacements:
+        result = result[:start] + html_span + result[end:]
+    
+    # Split into lines with proper HTML tag handling
+    lines = []
+    current_line = []
+    char_count = 0
+    in_tag = False
+    tag_buffer = []
+    
+    for char in result:
+        if char == '<':
+            in_tag = True
+            tag_buffer.append(char)
+            continue
+            
+        if in_tag:
+            tag_buffer.append(char)
+            if char == '>':
+                in_tag = False
+                current_line.append(''.join(tag_buffer))
+                tag_buffer = []
+            continue
+            
+        current_line.append(char)
+        char_count += 1
+        
+        if char_count >= line_length:
+            lines.append(''.join(current_line))
+            current_line = []
+            char_count = 0
+    
+    if current_line:
+        lines.append(''.join(current_line))
+        
+    if tag_buffer:  # Handle any unclosed tags
+        lines[-1] += ''.join(tag_buffer)
+        
+    return '<br>'.join(lines)
+
 #def 
 # Define dark theme template for plotly
 dark_template = dict(
@@ -691,6 +710,7 @@ app_ui = ui.page_fluid(
             # Sidebar panel
             ui.sidebar(
                 ui.panel_well(
+                    ui.HTML("AACATGGACGGTACATCGGG great example of horror<br>"),
                     ui.HTML("AACCCCAGAGGCTCAAGTGG full<br>"),
                     ui.HTML("GCTCGTATCCCGAAGCTAGG failed but overlaps<br>"),
                     ui.HTML("GATGCCTACCATCACTGTGG failed but overlaps<br>"),
@@ -995,6 +1015,7 @@ def server(input, output, session):
     # sync_slider_and_text(input, session, "kmer_size", "kmer_size_txt", shared_value1)
     # sync_slider_and_text(input, session, "slider2", "text2", shared_value2)
     #
+    os.system("rm -f *__*.dot *__*.csv")
 
     # Reactive data storage
     data = reactive.Value(None)
@@ -1295,7 +1316,6 @@ def server(input, output, session):
                         end_anchor=input.end_anchor(),
                         )
                     )
-            print(result)
             handle_assembly_result(result)
         except Exception as e:
             ui.notification_show(f"Error in regular assembly: {str(e)}", type="error")
@@ -1361,10 +1381,10 @@ def server(input, output, session):
                                    .sort('coverage', 'length', descending=True))
                         # path_df will be needed for adding decorate to nodes in the graph plot
                         # but assembly_results are to ones proccessed by path_results_output for display
-                        print(result)
+                        print(path_df)
                         path_results.set({
                             'results':result,
-                            'path_nodes': path_df['node_id'].to_list(),
+                            'path_nodes': path_df['sequence'].to_list(),
                             })
                     else:
                         path_results.set(None)
@@ -1383,7 +1403,7 @@ def server(input, output, session):
 
     @output
     @render.text
-    @reactive.event(input.top_path)  
+    @reactive.event(input.top_path, assembly_result)  
     def path_results_output():
         if path_results() is None:
             return ""
@@ -1689,10 +1709,10 @@ def server(input, output, session):
 
         graph_path = f"{base_path}{graph_suffix}__{input.graph_type()}.dot"
 
-        print(f"Looking for graph at: {graph_path}")  # Debug print
+        print(f"Looking for graph at: {graph_path}")  
 
         if not Path(graph_path).exists():
-            print(f"Graph file not found: {graph_path}")  # Debug print
+            print(f"Graph file not found: {graph_path}")
             empty_fig = go.Figure(layout=dark_template['layout'])
             empty_fig.update_layout(
                     #width=1000,
