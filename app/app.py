@@ -759,7 +759,9 @@ app_ui = ui.page_fluid(
             z-index: 1050; /* Ensure it appears on top */
         }
     """),
-        ui.h2("Contig Assembly Explorer"),
+        ui.h2("FRACTURE Explorer"),
+                                                   ui.output_ui("top_contigs"),
+                                                   ui.output_ui("path_results_output"),
 
         # Layout with sidebar
         ui.layout_sidebar(
@@ -874,26 +876,139 @@ app_ui = ui.page_fluid(
                                      ui.column(6,
                                                ui.panel_well(
                                                    ui.output_ui("assembly_stats"),
-                                                   ui.h3("Contig Sequence"),
-                                                   ui.output_text_verbatim("contig_sequence"),
-                                                   ui.output_ui("top_contigs"),
-                                                   ui.h3("Path Results"),
-                                                   ui.output_ui("path_results_output"),
-                                                   ui.input_text("top_path", "Top n paths", value=10, placeholder="How many paths to display (sorted byt coverage)"),
                                                    ),
                                                ),
-                                     ),
-                                 ui.row(
-                                     ui.column(9,
-                                               ui.panel_well("Polished Contigs Stats",
-                                                             ui.h3("Contig Sequence"),
-                                                             ui.output_ui("top_contigs_polish"),
-                                                             ),
-                                               open=False,
+                                     ui.column(6,
+                                               ui.h4("Coverage Plot (from uniqued reads!!)"),
+                                               ui.div(output_widget("coverage_plot"), style="height: 500px;"),
                                                ),
                                      ),
                                  ui.row(
-                                     ui.column(4,
+                                    ui.column(2,
+                                              ui.panel_well(
+                                                  ui.input_radio_buttons(
+                                                      "assembly_method",
+                                                      "Select Assembly Method",
+                                                      {
+                                                          "compression": "Graph Compression",
+                                                          "shortest_path": "Shortest Path"
+                                                          },
+                                                      selected="shortest_path"
+                                                      ),
+                                                  ui.input_action_button(
+                                                      "assemble",
+                                                      "Assemble Contig",
+                                                      class_="btn-primary"
+                                                      ),
+
+                                                  ui.input_text("start_anchor", "Start Anchor", value="GAGACTGCATGG", placeholder="Sequence at the 5' end"),
+                                                  ui.input_text("end_anchor", "End Anchor", value="TTTAGTGAGGGT", placeholder="Sequence at the 3' end"),
+                                                  ui.input_selectize(
+                                                      "umi", 
+                                                      "Select UMI",
+                                                      choices=[]
+                                                      ),
+                                                  ui.input_numeric(
+                                                      "min_coverage",
+                                                      "Minimum Coverage",
+                                                      value=5,
+                                                      ),
+                                                  ui.input_numeric(
+                                                      "kmer_size", 
+                                                      "K-mer Size", 
+                                                      value=10,
+                                                      ),
+                                                  ui.input_checkbox(
+                                                      "auto_k",
+                                                      "Auto K-mer Size",
+                                                      value=False
+                                                      ),
+                                                  ),
+
+                                                      ui.panel_well(
+                                                          ui.h4("Assembly Graph"),
+                                                  ui.input_action_button(
+                                                      "draw_graph",
+                                                      "Draw Graph",
+                                                      class_="btn-primary"
+                                                      ),
+                                                          ui.panel_well(
+                                                              ui.input_select(
+                                                                  "graph_type",
+                                                                  "Graph Plot Settings",
+                                                                  choices={
+                                                                      "compressed": "Compressed Graph",
+                                                                      "preliminary": "Preliminary Graph"
+                                                                      },
+                                                                  selected="compressed"
+                                                                  ),
+                                                              ),
+                                                          ui.panel_well(
+                                                              ui.h4("Graph Layout Options"),
+                                                              ui.input_switch(
+                                                                  "use_weighted",
+                                                                  "Use Weighted Layout",
+                                                                  value=False
+                                                                  ),
+                                                              ui.input_select(
+                                                                  "weight_method",
+                                                                  "Weight Calculation Method",
+                                                                  choices={
+                                                                      "nlog": "Negative Log Coverage",
+                                                                      "inverse": "Inverse Coverage"
+                                                                      },
+                                                                  selected="nlog"
+                                                                  )
+                                                              ),
+                                                          ui.panel_well(
+                                                              ui.h4("Graph Layout Parameters"),
+                                                              ui.input_numeric(
+                                                                  "layout_k",
+                                                                  "Node Spacing (k)",
+                                                                  value=1.5,
+                                                                  min=0.1,
+                                                                  max=5.0,
+                                                                  step=0.1
+                                                                  ),
+                                                              ui.input_numeric(
+                                                                  "layout_iterations",
+                                                                  "Layout Iterations",
+                                                                  value=50,
+                                                                  min=10,
+                                                                  max=200,
+                                                                  step=10
+                                                                  ),
+                                                              ui.input_numeric(
+                                                                  "layout_scale",
+                                                                  "Layout Scale",
+                                                                  value=2.0,
+                                                                  min=0.5,
+                                                                  max=5.0,
+                                                                  step=0.5
+                                                                  ),
+                                                              ),
+                                                          ),
+                                              ),
+
+                            ui.column(10,
+                                      ui.panel_well(
+                                          # output_widget("assembly_graph")
+                                          ui.div(output_widget("assembly_graph"), style="min-height: 1000px; height: auto; width: 100%")
+                                          )
+
+                                      ),
+                                                ui.column(2,
+                                                      ),
+),
+                    ui.row(
+                            ),
+
+            ),
+
+            ui.nav_panel("Sweep Results",
+                         ui.row(
+                         ui.column(2,
+
                                                ui.panel_well(
 
                                                    ui.h3("Parameter Sweep"),
@@ -948,165 +1063,15 @@ app_ui = ui.page_fluid(
                                                        ),
                                                ui.hr(),
                                         ),
-                                           ),
-ui.column(4,
-          ui.panel_well(
-
-              ui.input_radio_buttons(
-                  "assembly_method",
-                  "Select Assembly Method",
-                  {
-                      "compression": "Graph Compression",
-                      "shortest_path": "Shortest Path"
-                      },
-                  selected="shortest_path"
-                  ),
-              ui.input_action_button(
-                  "assemble",
-                  "Assemble Contig",
-                  class_="btn-primary"
-                  ),
-
-              ui.input_action_button(
-                  "draw_graph",
-                  "Draw Graph",
-                  class_="btn-primary"
-                  ),
-              ui.input_text("start_anchor", "Start Anchor", value="GAGACTGCATGG", placeholder="Sequence at the 5' end"),
-              ui.input_text("end_anchor", "End Anchor", value="TTTAGTGAGGGT", placeholder="Sequence at the 3' end"),
-              ui.input_selectize(
-                  "umi", 
-                  "Select UMI",
-                  choices=[]
-                  ),
-              ui.input_numeric(
-                  "min_coverage",
-                  "Minimum Coverage",
-                  value=17,
-                  ),
-              ui.input_numeric(
-                  "kmer_size", 
-                  "K-mer Size", 
-                  value=17,
-                  ),
-              ui.input_checkbox(
-                  "auto_k",
-                  "Auto K-mer Size",
-                  value=True
-                  ),
-              )
           ),
-ui.column(4,
-          ui.panel_well(
-              ui.h4("Polish Assembly Parameters"),
-              ui.input_numeric(
-                  "polish_min_coverage",
-                  "Polish Minimum Coverage",
-                  value=1,
-                  ),
-              ui.input_numeric(
-                  "polish_kmer_size", 
-                  "Polish K-mer Size", 
-                  value=8,
-                  ),
-              ui.input_checkbox(
-                  "polish_auto_k",
-                  "Auto K-mer Size",
-                  value=False
-                  ),
-              ui.input_action_button(
-                  "polish",
-                  "Polish Assembly",
-                  class_="btn-primary"
-                  ),
-              )
-          ),
-),
-                    ui.row(
                             ui.column(4,
                                       ui.panel_well(
                                           ui.h4("K-mer vs Coverage Sweep"),
                                           ui.div(output_widget("sweep_heatmap"), style="height: 500px;"),
                                           )
                                       ),
-                            ui.column(4,
-                                      ui.panel_well(
-                                          ui.h4("Assembly Graph"),
-                                          ui.panel_well(
-                                              ui.input_select(
-                                                  "graph_type",
-                                                  "Graph Plot Settings",
-                                                  choices={
-                                                      "compressed": "Compressed Graph",
-                                                      "preliminary": "Preliminary Graph"
-                                                      },
-                                                  selected="compressed"
-                                                  ),
-                                              ui.input_switch(
-                                                  "use_polished",
-                                                  "Use Polished Assembly",
-                                                  value=False
-                                                  ),
-                                              ),
-                                          ui.panel_well(
-                                              ui.h4("Graph Layout Options"),
-                                              ui.input_switch(
-                                                  "use_weighted",
-                                                  "Use Weighted Layout",
-                                                  value=False
-                                                  ),
-                                              ui.input_select(
-                                                  "weight_method",
-                                                  "Weight Calculation Method",
-                                                  choices={
-                                                      "nlog": "Negative Log Coverage",
-                                                      "inverse": "Inverse Coverage"
-                                                      },
-                                                  selected="nlog"
-                                                  )
-                                              ),
-                                          ui.panel_well(
-                                              ui.h4("Graph Layout Parameters"),
-                                              ui.input_numeric(
-                                                  "layout_k",
-                                                  "Node Spacing (k)",
-                                                  value=1.5,
-                                                  min=0.1,
-                                                  max=5.0,
-                                                  step=0.1
-                                                  ),
-                                              ui.input_numeric(
-                                                  "layout_iterations",
-                                                  "Layout Iterations",
-                                                  value=50,
-                                                  min=10,
-                                                  max=200,
-                                                  step=10
-                                                  ),
-                                              ui.input_numeric(
-                                                  "layout_scale",
-                                                  "Layout Scale",
-                                                  value=2.0,
-                                                  min=0.5,
-                                                  max=5.0,
-                                                  step=0.5
-                                                  ),
-                                              ),
-                                          # output_widget("assembly_graph")
-                                          ui.div(output_widget("assembly_graph"), style="min-height: 1000px; height: auto; width: 100%")
-                                          )
-
-                                      ),
-                            ui.column(4,
-                                      ui.h4("Coverage Plot (from uniqued reads!!)"),
-                                      ui.div(output_widget("coverage_plot"), style="height: 500px;"),
                                       ),
                             ),
-
-            ),
-
-            ui.nav_panel("Sweep Results",
-                         ),
             selected="Assembly Results"  
         )
     ),
@@ -1429,48 +1394,6 @@ def server(input, output, session):
         except Exception as e:
             ui.notification_show(f"Error in regular assembly: {str(e)}", type="error")
 
-    @reactive.Effect
-    @reactive.event(input.polish)
-    def run_polish_assembly():
-        try:
-            if data() is None or not input.umi():
-                ui.notification_show("Please load data and select a UMI first", type="warning")
-                return
-
-            base_path = f"{Path(__file__).parent}/{input.umi()}"
-            graph_path = f"{base_path}__compressed.csv"
-            print(f"will polish contigs from {graph_path}")
-
-            if not Path(graph_path).exists():
-                ui.notification_show("Compressed graph data not found", type="error")
-                return
-
-            polish_umi = f'polish_{input.umi()}'
-            df = (
-                    pl.read_csv(graph_path)
-                    .with_columns(pl.col('sequence').str.len_chars().alias('length'))
-                    .sort('coverage', 'length',  descending=True)
-                    .select('node_id', 'sequence', 'coverage', 'length')
-                    .with_columns(umi=pl.lit(polish_umi))
-                    .rename({'sequence':'r2_seq'})
-                    )
-            pl.Config().set_tbl_width_chars(100)
-
-
-            result = df.pp.assemble_umi(target_umi=polish_umi,
-                                        k=int(input.kmer_size()),
-                                        min_cov=int(input.min_coverage()),
-                                        auto_k=input.auto_k(),
-                                        export_graphs=True,
-                                        only_largest=True,
-                                        intbc_5prime='GAGACTGCATGG'
-                                        )
-
-
-            handle_assembly_result(result)
-        except Exception as e:
-            ui.notification_show(f"Error in polish assembly: {str(e)}", type="error")
-
     def handle_assembly_result(result):
         """Common function to handle assembly results"""
         try:
@@ -1584,37 +1507,6 @@ def server(input, output, session):
             print(f"Error loading top contigs: {str(e)}")
             return "Error loading contig data"
 
-    @output
-    @render.text 
-    @reactive.event(assembly_result)  
-    def top_contigs_polish():
-        if data() is None or assembly_result() is None:
-            return "No polished contigs available"
-
-        try:
-            polish_umi = f'polish_{input.umi()}'
-            base_path = f"{Path(__file__).parent}/{polish_umi}"
-            graph_path = f"{base_path}__compressed.csv"
-
-            if not Path(graph_path).exists():
-                return "Polished contig graph data not found"
-
-            df = (
-                    pl.read_csv(graph_path)
-                    .with_columns(pl.col('sequence').str.len_chars().alias('length'))
-                    .sort('coverage', 'length', descending=True)
-                    .select('node_id', 'sequence', 'coverage', 'length')
-                    .head(5)
-                    )
-
-            if not df.shape[0] == 0:
-                pl.Config().set_tbl_width_chars(df.get_column('length').max()+1)
-
-            return ui.HTML(format_top_contigs_table(df))
-
-        except Exception as e:
-            print(f"Error loading polished top contigs: {str(e)}")
-            return "Error loading polished contig data"
 
     @reactive.Effect
     @reactive.event(input.run_sweep)
@@ -1811,11 +1703,8 @@ def server(input, output, session):
         # Build path based on selected graph type and assembly mode
         base_path = f"{Path(__file__).parent}/"
 
-        # Determine graph suffix based on use_polished toggle
-        polish_umi = f'polish_{input.umi()}'
 
-        graph_suffix = polish_umi if input.use_polished() else input.umi()
-
+        graph_suffix = input.umi()
         graph_path = f"{base_path}{graph_suffix}__{input.graph_type()}.dot"
 
         print(f"Looking for graph at: {graph_path}")  
@@ -1879,10 +1768,9 @@ def server(input, output, session):
 
         # Add debug information to layout
         fig.update_layout(
-                #title=f"Graph: {graph_path}<br>Polished: {input.use_polished()}",
                 annotations=[
                     dict(
-                        text=f"Graph: {graph_path}<br>Polished: {input.use_polished()}",
+                        text=f"Graph: {graph_path}<br>",
                         xref="paper",
                         yref="paper",
                         x=0.5,
