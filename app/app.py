@@ -1433,13 +1433,13 @@ def server(input, output, session):
 
     @output
     @render.text
-    @reactive.event( assembly_result, input.top_path)  
+    @reactive.event(assembly_result)  
     def path_results_output():
         if path_results() is None:
             return ""
         
 
-        head_n_paths = 5 if input.top_path() == '' else int(input.top_path())
+        head_n_paths = 5 
 
         df = (
                 path_results()['results']
