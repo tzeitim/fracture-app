@@ -769,6 +769,7 @@ app_ui = ui.page_fluid(
             ui.sidebar(
                 ui.panel_well(
                     ui.h1("Hall of Fame"),
+                    ui.HTML("GGGCCTGCATCGCACTGTGG google<br>"),
                     ui.HTML("TTTTCCCGACGGCTGATCGG messy<br>"),
                     ui.HTML("AACATGGACGGTACATCGGG great example of horror<br>"),
                     ui.HTML("AACCCCAGAGGCTCAAGTGG full<br>"),
@@ -852,10 +853,6 @@ app_ui = ui.page_fluid(
                                                    )
                                                ),
                                      ui.column(6,
-                                               ui.panel_well(
-                                                   ui.h4("Selected UMI Stats"),
-                                                   ui.output_text("selected_umi_stats")
-                                                   )
                                                )
                                      ),
                                  ui.row(
@@ -872,6 +869,13 @@ app_ui = ui.page_fluid(
                                      )
                                  ),
                     ui.nav_panel("Assembly Results",
+                                 ui.row(
+
+                                               ui.panel_well(
+                                                   ui.h4("Selection UMI Stats"),
+                                                   ui.output_ui("selected_umi_stats")
+                                                   )
+                                     ),
                                  ui.row(
                                      ui.column(6,
                                                ui.panel_well(
@@ -957,7 +961,7 @@ app_ui = ui.page_fluid(
                                                                       "nlog": "Negative Log Coverage",
                                                                       "inverse": "Inverse Coverage"
                                                                       },
-                                                                  selected="nlog"
+                                                                  selected="inverse"
                                                                   )
                                                               ),
                                                           ui.panel_well(
@@ -965,17 +969,17 @@ app_ui = ui.page_fluid(
                                                               ui.input_numeric(
                                                                   "layout_k",
                                                                   "Node Spacing (k)",
-                                                                  value=1.5,
-                                                                  min=0.1,
+                                                                  value=0.001,
+                                                                  min=0,
                                                                   max=5.0,
-                                                                  step=0.1
+                                                                  step=0.001,
                                                                   ),
                                                               ui.input_numeric(
                                                                   "layout_iterations",
                                                                   "Layout Iterations",
-                                                                  value=50,
+                                                                  value=500,
                                                                   min=10,
-                                                                  max=200,
+                                                                  max=2000,
                                                                   step=10
                                                                   ),
                                                               ui.input_numeric(
@@ -1015,18 +1019,18 @@ app_ui = ui.page_fluid(
                                                    ui.input_slider(
                                                        "k_start",
                                                        "K-mer Range Start",
-                                                       min=1,
-                                                       max=20,
-                                                       value=1,
+                                                       min=5,
+                                                       max=14,
+                                                       value=5,
                                                        step=1
                                                        ),
 
                                                    ui.input_slider(
                                                        "k_end",
                                                        "K-mer Range End",
-                                                       min=21,
+                                                       min=15,
                                                        max=64,
-                                                       value=64,
+                                                       value=15,
                                                        step=1
                                                        ),
 
@@ -1041,9 +1045,9 @@ app_ui = ui.page_fluid(
                                                    ui.input_slider(
                                                        "cov_end",
                                                        "Coverage Range End",
-                                                       min=250,
+                                                       min=18,
                                                        max=500,
-                                                       value=100
+                                                       value=20,
                                                        ),
 
                                                    ui.input_slider(
@@ -1095,6 +1099,8 @@ def server(input, output, session):
     assembly_result = reactive.Value(None)
     sweep_results = reactive.Value(None)
     path_results = reactive.Value(None)
+    dataset = reactive.Value(None)
+
 
     #ncpu = cpu_count(logical=True)
     #cpu_history = reactive.Value(None)
@@ -1220,6 +1226,7 @@ def server(input, output, session):
                         )
                 return
 
+            dataset.set(file_path)
             ui.notification_show(f"loading from {input.input_type()}")     
             ui.notification_show(f"loading from {file_path}")     
 
@@ -1292,14 +1299,44 @@ def server(input, output, session):
         try:
             df = data()
             umi_reads = df.filter(pl.col('umi') == input.umi()).height
-            return f"Selected UMI: {input.umi()}\nNumber of reads: {umi_reads}"
+            return ui.HTML(f"""
+            Dataset: <span style="color: #ffffff;">{dataset()}</span>
+            Reads per UMI: <span style="color: #ffffff;">{umi_reads}</span>
+            """
+                       )
         except Exception as e:
             print(f"Error in selected_umi_stats: {e}")  # Log error
             return "Error calculating UMI stats"
-
     @output
     @render_plotly
     def coverage_dist():
+        if data() is None:
+            return go.Figure()
+
+        df = (data()
+              .select('umi', 'reads')
+              .unique())
+
+        fig = px.ecdf(
+            df.to_pandas(),
+            y='reads',
+            ecdfmode="reversed",
+        )
+
+        fig.update_layout(
+            **dark_template['layout'],
+            xaxis_type="log",
+            yaxis_type="log", 
+            xaxis_title="Fraction of UMIs",
+            yaxis_title="Number of Reads",
+            title="Reads per UMI Distribution (Complementary CDF)"
+        )
+
+        return fig
+
+    @output
+    @render_plotly
+    def rcoverage_dist():
         if data() is None:
             return go.Figure()
 
@@ -1381,12 +1418,13 @@ def server(input, output, session):
                     .pp.assemble_umi(
                         target_umi=input.umi(),
                         k=int(input.kmer_size()),
-                        min_cov=int(input.min_coverage()),
+                        min_coverage=int(input.min_coverage()),
                         method=input.assembly_method(),
                         auto_k=input.auto_k(),
                         export_graphs=True,
                         only_largest=True,
                         start_anchor=input.start_anchor(),
+                        min_length=None,
                         end_anchor=input.end_anchor(),
                         )
                     )
@@ -1507,69 +1545,138 @@ def server(input, output, session):
             print(f"Error loading top contigs: {str(e)}")
             return "Error loading contig data"
 
-
     @reactive.Effect
     @reactive.event(input.run_sweep)
     def run_parameter_sweep():
+        if data() is None or not input.umi():
+            ui.notification_show("Please load data and select a UMI first", type="warning")
+            return
+
         try:
-            if data() is None or not input.umi():
-                ui.notification_show(
-                        "Please load data and select a UMI first",
-                        type="warning"
-                        )
+            k_start = int(input.k_start())
+            k_end = int(input.k_end())
+            if k_end <= k_start:
+                ui.notification_show("K-end must be greater than K-start", type="error")
                 return
 
+            cov_start = int(input.cov_start())
+            cov_end = int(input.cov_end())
+            if cov_end <= cov_start:
+                ui.notification_show("Coverage end must be greater than start", type="error")
+                return
+
+            ui.notification_show(
+                "Running parameter sweep...", 
+                type="message"
+            )
+
+            print(f"Starting sweep with parameters:")
+            print(f"UMI: {input.umi()}")
+            print(f"K-mer range: {k_start}-{k_end}, step={input.k_step()}")
+            print(f"Coverage range: {cov_start}-{cov_end}")
+
             df = data()
-            filtered_df = (
-                    df.filter(pl.col('umi') == input.umi())
-                    )
-
-            ui.notification_show(
-                    "Running parameter sweep...",
-                    type="message"
-                    )
-
-            # Run sweep using the API
             result = (
-                    filtered_df
+                df.pp.sweep_assembly_params(
+                    target_umi=input.umi(),
+                    start_anchor=input.start_anchor(),
+                    end_anchor=input.end_anchor(),
+                    k_start=k_start,
+                    k_end=k_end,
+                    k_step=int(input.k_step()),
+                    cov_start=cov_start,
+                    cov_end=cov_end,
+                    cov_step=1,
+                    method=input.assembly_method(),
+                    min_length=None,
+                    export_graphs=False,
+                    prefix=f"{input.umi()}_"
+                )
+                .pivot(
+                    values="contig_length",
+                    index="k",
+                    columns="min_coverage"
+                )
+            )
 
-                    .pp.assemble_sweep_params_umi(
-                        target_umi=input.umi(),
-                        k_start=input.k_start(),
-                        k_end=input.k_end(),
-                        k_step=input.k_step(),
-                        cov_start=input.cov_start(),
-                        cov_end=input.cov_end(),
-                        cov_step=5,
-                        export_graphs=False,
-                        intbc_5prime='GAGACTGCATGG',
-                        prefix=input.umi()
-                        )
-                    .drop('umi')
-                    .pivot(index='k', on='min_coverage', values='contig_length')
-                    )
-
-            #result.write_parquet(f'{input.umi()}_sweep.parquet')
-            result = result.to_pandas().set_index('k')
-
-            sweep_results.set(result)
-
+            result_pd = result.to_pandas().set_index('k')
+            sweep_results.set(result_pd)
             ui.notification_show(
-                    "Parameter sweep completed!",
-                    type="message"
-                    )
+                "Parameter sweep completed successfully!", 
+                type="message"
+            )
 
         except Exception as e:
+            print(f"Sweep error details: {str(e)}")
             ui.notification_show(
-                    f"Error during parameter sweep: {str(e)}",
-                    type="error"
-                    )
-            print(f"Sweep error: {str(e)}")
+                f"Error during parameter sweep: {str(e)}", 
+                type="error"
+            )
+
+            # Reset sweep results
+            sweep_results.set(None)
 
     @output
     @render_plotly
-    @reactive.event(input.umi, data)
+    @reactive.event(input.umi, data, assembly_result )
 
+    def coverage_contig_plot():
+        mods = pl.read_parquet('mods.parquet')
+        ref_str = mods.filter(pl.col('mod')=='mod_0')['seq'][0]
+
+        if data() is None or not input.umi() or input.umi() not in data()['umi']:
+            empty_fig = go.Figure(layout=dark_template['layout'])
+            empty_fig.update_layout(
+                    height=500,
+                    autosize=True,
+                    annotations=[dict(
+                        text="No data available",
+                        xref="paper",
+                        yref="paper",
+                        x=0.5,
+                        y=0.5,
+                        showarrow=False,
+                        font=dict(color='#ffffff', size=14)
+                        )]
+                    )
+            return empty_fig
+
+
+        df =(
+                data()
+                .filter(pl.col('umi')==input.umi())
+                .with_columns(intbc=pl.lit('in')) # dummy intbc field needed for alignment
+                )
+
+        result = al.compute_coverage(df , ref_str, max_range=len(ref_str))
+
+        fig = px.line(
+                result,
+                x='covered_positions',
+                y='coverage',
+                labels=dict(
+                    x="Position in reference",
+                    y="Reads",
+                    ),
+                title="Coverage of raw reads",
+                height=500,
+                )
+
+        fig.update_layout(
+                **dark_template['layout'],
+                xaxis_title="Minimum Coverage",
+                yaxis_title="K-mer Size",
+                autosize=True,
+                )
+
+        # Ensure axis labels are visible
+        fig.update_xaxes(showticklabels=True, title_standoff=25)
+        fig.update_yaxes(showticklabels=True, title_standoff=25)
+
+        return fig
+    @output
+    @render_plotly
+    @reactive.event(input.umi, data)
     def coverage_plot():
         mods = pl.read_parquet('mods.parquet')
         ref_str = mods.filter(pl.col('mod')=='mod_0')['seq'][0]
