@@ -12,6 +12,7 @@ SYSTEM_PREFIXES = {
         }
 
 # Theme settings
+# Current dark theme (slate)
 DARK_TEMPLATE = dict(
         layout=dict(
             paper_bgcolor='#2d3339',  # Match Slate theme background
@@ -31,6 +32,25 @@ DARK_TEMPLATE = dict(
             )
         )
 
+# Catppuccin Latte (light theme)
+LATTE_TEMPLATE = dict(
+        layout=dict(
+            paper_bgcolor='#eff1f5',  # Base
+            plot_bgcolor='#e6e9ef',   # Mantle
+            font=dict(color='#4c4f69'),  # Text
+            xaxis=dict(
+                gridcolor='#ccd0da',  # Surface1
+                linecolor='#ccd0da',
+                zerolinecolor='#ccd0da'
+                ),
+            yaxis=dict(
+                gridcolor='#ccd0da',
+                linecolor='#ccd0da',
+                zerolinecolor='#ccd0da'
+                ),
+            margin=dict(t=30, l=10, r=10, b=10)
+            )
+        )
 # Sequence color settings
 SEQUENCE_COLORS = {
     'GAGACTGCATGG': '#50C878',  # Emerald green for theme
