@@ -51,6 +51,27 @@ LATTE_TEMPLATE = dict(
             margin=dict(t=30, l=10, r=10, b=10)
             )
         )
+
+# Catppuccin Mocha (dark theme)
+MOCHA_TEMPLATE = dict(
+        layout=dict(
+            paper_bgcolor='#1e1e2e',  # Base
+            plot_bgcolor='#181825',   # Mantle
+            font=dict(color='#cdd6f4'),  # Text
+            xaxis=dict(
+                gridcolor='#313244',  # Surface1
+                linecolor='#313244',
+                zerolinecolor='#313244'
+                ),
+            yaxis=dict(
+                gridcolor='#313244',
+                linecolor='#313244',
+                zerolinecolor='#313244'
+                ),
+            margin=dict(t=30, l=10, r=10, b=10)
+            )
+        )
+
 # Sequence color settings
 SEQUENCE_COLORS = {
     'GAGACTGCATGG': '#50C878',  # Emerald green for theme
