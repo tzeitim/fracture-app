@@ -5,6 +5,7 @@ import networkx as nx
 import re
 import html
 import numpy as np
+import polars as pl
 from .config import DARK_TEMPLATE, SEQUENCE_COLORS
 
 def extract_coverage(input_data):
@@ -255,33 +256,42 @@ def create_edges(graph, pos, line_shape):
     edge_x, edge_y, edge_texts = [], [], []
     
     for u, v in graph.edges():
-        x0, y0 = pos[u]
-        x1, y1 = pos[v]
-        
-        if line_shape == 'linear':
-            edge_x.extend([x0, x1, None])
-            edge_y.extend([y0, y1, None])
-        else:
-            # Add curved edges
-            mid_x = (x0 + x1) / 2
-            mid_y = (y0 + y1) / 2
-            offset = 0.05
-            if abs(x1 - x0) > abs(y1 - y0):
-                mid_y += offset
-            else:
-                mid_x += offset
-            edge_x.extend([x0, mid_x, x1, None])
-            edge_y.extend([y0, mid_y, y1, None])
-            
-        # Add edge label
         try:
-            edge_data = graph.get_edge_data(u, v)
-            label = edge_data.get('label', '') if edge_data else ''
-            if isinstance(label, str):
-                label = label.strip('"')
-            edge_texts.append(f"<b>{u} → {v}</b><br>{label}" if label else f"<b>{u} → {v}</b>")
+            # Ensure both nodes have positions
+            if u not in pos or v not in pos:
+                print(f"Warning: Edge nodes ({u}, {v}) missing from position dictionary, skipping")
+                continue
+                
+            x0, y0 = pos[u]
+            x1, y1 = pos[v]
+            
+            if line_shape == 'linear':
+                edge_x.extend([x0, x1, None])
+                edge_y.extend([y0, y1, None])
+            else:
+                # Add curved edges
+                mid_x = (x0 + x1) / 2
+                mid_y = (y0 + y1) / 2
+                offset = 0.05
+                if abs(x1 - x0) > abs(y1 - y0):
+                    mid_y += offset
+                else:
+                    mid_x += offset
+                edge_x.extend([x0, mid_x, x1, None])
+                edge_y.extend([y0, mid_y, y1, None])
+                
+            # Add edge label
+            try:
+                edge_data = graph.get_edge_data(u, v)
+                label = edge_data.get('label', '') if edge_data else ''
+                if isinstance(label, str):
+                    label = label.strip('"')
+                edge_texts.append(f"<b>{u} → {v}</b><br>{label}" if label else f"<b>{u} → {v}</b>")
+            except Exception as e:
+                edge_texts.append(f"<b>{u} → {v}</b>")
         except Exception as e:
-            edge_texts.append(f"<b>{u} → {v}</b>")
+            print(f"Error creating edge for ({u}, {v}): {str(e)}")
+            continue
             
     return edge_x, edge_y, edge_texts
 
@@ -342,7 +352,7 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
 
 def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', 
                       debug=False, path_nodes=None, weighted=False, weight_method='nlog', 
-                      spring_args=None):
+                      separate_components=False, component_padding=3.0, min_component_size=3, spring_args=None):
     """Create an interactive plot of the assembly graph.
     
     Args:
@@ -352,6 +362,9 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         graph_type (str): Type of graph visualization
         debug (bool): Whether to print debug information
         path_nodes (list/set): Node IDs that are part of the path
+        separate_components (bool): Whether to position disjoint graphs separately
+        component_padding (float): Amount of padding between separate components
+        min_component_size (int): Minimum size of a component to be included in the plot
     """
     if spring_args is None:
         spring_args = {'k': 1.5, 'iterations': 50, 'scale': 2.0} 
@@ -368,10 +381,118 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
 
     if weighted:
         graph = create_weighted_graph(graph, weight_method)
-        pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+    
+    # Calculate node positions based on layout settings
+    if separate_components:
+        # Identify connected components for separate layout
+        components = list(nx.connected_components(graph.to_undirected()))
+        
+        # Filter out components smaller than min_component_size
+        filtered_components = [comp for comp in components if len(comp) >= min_component_size]
+        print(f"Graph has {len(components)} connected components, {len(filtered_components)} meet the minimum size requirement")
+        
+        # Sort components by size (largest first)
+        filtered_components.sort(key=len, reverse=True)
+        
+        # Calculate layout for each component and place in a grid
+        pos = {}
+        component_info = []  # Store component info for grid placement
+        
+        # First pass - calculate layouts and store info
+        for component in filtered_components:
+            # Create subgraph for this component
+            subgraph = graph.subgraph(component)
+            
+            # Calculate layout for this component
+            if weighted:
+                component_pos = nx.spring_layout(subgraph, weight='weight', **spring_args, seed=42)
+            else:
+                component_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
+            
+            # Find bounding box and scale factor based on component size
+            min_x = min(p[0] for p in component_pos.values()) if component_pos else 0
+            max_x = max(p[0] for p in component_pos.values()) if component_pos else 0
+            min_y = min(p[1] for p in component_pos.values()) if component_pos else 0
+            max_y = max(p[1] for p in component_pos.values()) if component_pos else 0
+            width = max_x - min_x
+            height = max_y - min_y
+            
+            # Normalize the scale based on component size
+            # Calculate a scale factor proportional to sqrt(component size)
+            # This ensures larger components get more space but not excessively so
+            scale_factor = np.sqrt(len(component)) / 2.0
+            
+            component_info.append({
+                'component': component,
+                'pos': component_pos,
+                'width': width * scale_factor,
+                'height': height * scale_factor,
+                'scale_factor': scale_factor,
+                'size': len(component)
+            })
+        
+        # If no components meet the size requirement, revert to standard layout
+        if not filtered_components:
+            if weighted:
+                pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+            else:
+                pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+        else:
+            # Second pass - arrange components in a grid, starting with largest component at top left
+            current_x, current_y = 0, 0
+            
+            # Group components into rows
+            rows = []
+            current_row = []
+            current_row_width = 0
+            max_row_width = 20.0  # Maximum width for a row before starting a new row
+            
+            for info in component_info:
+                # If adding this component would exceed the max row width, start a new row
+                if current_row_width + info['width'] + component_padding > max_row_width and current_row:
+                    rows.append(current_row)
+                    current_row = [info]
+                    current_row_width = info['width']
+                else:
+                    current_row.append(info)
+                    current_row_width += info['width'] + component_padding
+            
+            # Add the last row if not empty
+            if current_row:
+                rows.append(current_row)
+            
+            # Position components within rows
+            current_y = 0
+            for row in rows:
+                current_x = 0
+                max_height_in_row = max(info['height'] for info in row) if row else 0
+                
+                for info in row:
+                    component = info['component']
+                    component_pos = info['pos']
+                    scale_factor = info['scale_factor']
+                    
+                    # Apply scaling and offset to this component's positions
+                    for node, (x, y) in component_pos.items():
+                        # Scale the position
+                        scaled_x = x * scale_factor
+                        scaled_y = y * scale_factor
+                        
+                        # Apply offset
+                        pos[node] = (scaled_x + current_x, scaled_y + current_y)
+                    
+                    # Move to the next position in the row
+                    current_x += info['width'] + component_padding
+                
+                # Move to the next row
+                current_y += max_height_in_row + component_padding
     else:
-        # Calculate layout
-        pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+        # Use standard layout for the entire graph
+        if weighted:
+            pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+        else:
+            # Calculate layout
+            pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
     
     # Extract node information
     node_x, node_y = [], []
@@ -398,83 +519,108 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
 
     # Second pass to build node properties
     for node in graph.nodes():
-        x, y = pos[node]
-        node_x.append(x)
-        node_y.append(y)
+        try:
+            # Check if node is in the position dictionary
+            if node not in pos:
+                print(f"Warning: Node {node} has no position, skipping")
+                continue
+                
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
 
-        attrs = graph.nodes[node]
-        label = attrs.get('label', '')
-        
-        if isinstance(label, str):
-            # Parse node label
-            label = label.strip('"').replace('\\\\n', '\n').replace('\\n', '\n')
-            id_part, seq_part, cov_part = parse_node_label(label)
+            attrs = graph.nodes[node]
+            label = attrs.get('label', '')
             
-            # Build hover text
-            hover_text = build_hover_text(id_part, seq_part, cov_part, sequence_colors)
-            hover_texts.append(hover_text)
-            
-            # Get node style
-            node_style = get_node_style(seq_part, sequence_colors, dark_mode, 
-                                      node_id=seq_part, path_nodes=path_nodes)
-            node_colors.append(node_style['color'])
-            
-            # Calculate node size
-            coverage = extract_coverage(label)
-            if coverage is not None and max_coverage > min_coverage:
-                size = min_size + (max_size - min_size) * (coverage - min_coverage) / (max_coverage - min_coverage)
+            if isinstance(label, str):
+                # Parse node label
+                label = label.strip('"').replace('\\\\n', '\n').replace('\\n', '\n')
+                id_part, seq_part, cov_part = parse_node_label(label)
+                
+                # Build hover text
+                hover_text = build_hover_text(id_part, seq_part, cov_part, sequence_colors)
+                hover_texts.append(hover_text)
+                
+                # Get node style
+                node_style = get_node_style(seq_part, sequence_colors, dark_mode, 
+                                          node_id=seq_part, path_nodes=path_nodes)
+                node_colors.append(node_style['color'])
+                
+                # Calculate node size
+                coverage = extract_coverage(label)
+                if coverage is not None and max_coverage > min_coverage:
+                    size = min_size + (max_size - min_size) * (coverage - min_coverage) / (max_coverage - min_coverage)
+                else:
+                    size = min_size
+                node_sizes.append(size)
+                
+                node_labels.append("")  # Empty label since we're using hover text
             else:
-                size = min_size
-            node_sizes.append(size)
-            
-            node_labels.append("")  # Empty label since we're using hover text
-        else:
-            hover_texts.append(f"Node: {node}")
-            node_colors.append('rgba(0,0,0,0)')
-            node_sizes.append(min_size)
-            node_labels.append(str(node))
+                hover_texts.append(f"Node: {node}")
+                node_colors.append('rgba(0,0,0,0)')
+                node_sizes.append(min_size)
+                node_labels.append(str(node))
+        except Exception as e:
+            print(f"Error processing node {node}: {str(e)}")
+            # Don't return the node ID here - continue processing other nodes
+            continue
 
     # Create edges
     edge_x, edge_y, edge_texts = create_edges(graph, pos, line_shape)
 
-    # Create figure
-    fig = go.Figure()
+    # Create the figure
+    try:
+        # Check if we have any nodes to display
+        if not node_x or not node_y:
+            print("Warning: No nodes with valid positions found")
+            fig = create_empty_figure("No nodes with valid positions found")
+            return fig
+            
+        fig = go.Figure()
 
-    # Add edges
-    fig.add_trace(go.Scatter(
-        x=edge_x, y=edge_y,
-        line=dict(width=1.5, color='#4f5b66' if dark_mode else '#888', shape=line_shape),
-        hoverinfo='text',
-        hovertext=edge_texts,
-        mode='lines',
-        showlegend=False
-    ))
+        # Add edges
+        fig.add_trace(go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=1.5, color='#4f5b66' if dark_mode else '#888', shape=line_shape),
+            hoverinfo='text',
+            hovertext=edge_texts,
+            mode='lines',
+            showlegend=False
+        ))
 
-    # Add nodes
-    node_marker = dict(
-        showscale=False,
-        color=node_colors,
-        size=node_sizes,
-        line=dict(width=1, color='#4f5b66' if dark_mode else '#888'),
-        symbol='circle'
-    )
+        # Add nodes
+        node_marker = dict(
+            showscale=False,
+            color=node_colors,
+            size=node_sizes,
+            line=dict(width=1, color='#4f5b66' if dark_mode else '#888'),
+            symbol='circle'
+        )
 
-    fig.add_trace(go.Scatter(
-        x=node_x, y=node_y,
-        mode='markers',
-        hoverinfo='text',
-        hovertext=hover_texts,
-        text=node_labels,
-        textposition="bottom center",
-        textfont=dict(size=12),
-        marker=node_marker,
-        showlegend=False
-    ))
+        fig.add_trace(go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers',
+            hoverinfo='text',
+            hovertext=hover_texts,
+            text=node_labels,
+            textposition="bottom center",
+            textfont=dict(size=12),
+            marker=node_marker,
+            showlegend=False
+        ))
 
-    # Update layout
-    update_figure_layout(fig, dark_mode, node_x, node_y)
-    
-    return fig
+        # Update layout
+        update_figure_layout(fig, dark_mode, node_x, node_y)
+        
+        # Make absolutely sure we're returning a proper Plotly figure
+        if not isinstance(fig, go.Figure):
+            print(f"Error: Expected go.Figure but got {type(fig)}")
+            return create_empty_figure("Error creating graph visualization")
+            
+        return fig
+    except Exception as e:
+        print(f"Error creating figure: {str(e)}")
+        return create_empty_figure(f"Error creating graph: {str(e)}")
 
 def highlight_sequences_in_table(text):
     """Highlight specific sequences in text with HTML formatting."""

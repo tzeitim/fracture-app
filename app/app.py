@@ -5,6 +5,7 @@ import polars as pl
 import os
 from pathlib import Path
 import plotly.graph_objects as go
+import plotly.express as px
 import matplotlib
 import pandas as pd
 
@@ -12,7 +13,7 @@ import pandas as pd
 matplotlib.use("agg")
 
 # Import modules
-from modules.config import SYSTEM_PREFIXES, DARK_TEMPLATE
+from modules.config import SYSTEM_PREFIXES, DARK_TEMPLATE, LATTE_TEMPLATE, MOCHA_TEMPLATE
 from modules.data_loader import load_database, load_data
 from modules.data_processing import get_umis, get_selected_umi_stats, compute_coverage, assemble_umi, sweep_assembly_params
 from modules.visualization import (
@@ -21,7 +22,8 @@ from modules.visualization import (
 )
 from modules.ui_components import (
     create_data_input_sidebar, create_assembly_controls, 
-    create_graph_controls, create_parameter_sweep_controls
+    create_graph_controls, create_parameter_sweep_controls,
+    create_theme_controls
 )
 
 # Configure polars for pretty printing
@@ -53,9 +55,6 @@ app_ui = ui.page_fluid(
         # Sidebar panel
         ui.sidebar(
             create_data_input_sidebar(db),
-            ui.panel_well(
-                ui.hr(),
-            ),
             width=350,
         ),
 
@@ -130,15 +129,33 @@ app_ui = ui.page_fluid(
                     ),
                 ),
             ),
+            ui.nav_panel("Settings",
+                ui.row(
+                    ui.column(6,
+                        ui.panel_well(
+                            ui.h3("Application Settings"),
+                            create_theme_controls()
+                        )
+                    ),
+                ),
+            ),
+            id="main_tabs",
             selected="Assembly Results"  
         )
     ),
-    theme=shinyswatch.theme.slate()
+    ui.output_ui("theme_css"),
+    theme=shinyswatch.theme.slate(),
 )
 
 def server(input, output, session):
     # Clean up any temporary files
     os.system("rm -f *__*.dot *__*.csv")
+    
+    # Debug print
+    print("Starting server with tabs - Assembly Results tab should be selected by default")
+    
+    # Explicitly select the Assembly Results tab on startup
+    ui.update_navs("main_tabs", selected="Assembly Results")
 
     # Reactive data storage
     data = reactive.Value(None)
@@ -146,6 +163,160 @@ def server(input, output, session):
     sweep_results = reactive.Value(None)
     path_results = reactive.Value(None)
     dataset = reactive.Value(None)
+    current_template = reactive.Value(DARK_TEMPLATE)
+    
+    # Theme handling
+    @reactive.Effect
+    @reactive.event(input.app_theme)
+    def update_theme():
+        selected_theme = input.app_theme()
+        
+        if selected_theme == "latte":
+            # Update application theme
+            session.send_custom_message("shinyswatch-theme", "minty")
+            current_template.set(LATTE_TEMPLATE)
+        elif selected_theme == "mocha":
+            # Update application theme
+            session.send_custom_message("shinyswatch-theme", "darkly")
+            current_template.set(MOCHA_TEMPLATE)
+        else:
+            # Default slate theme
+            session.send_custom_message("shinyswatch-theme", "slate")
+            current_template.set(DARK_TEMPLATE)
+    
+    @reactive.Effect
+    @reactive.event(input.assembly_method)
+    def update_graph_type_on_method_change():
+        # When assembly method changes, automatically update the graph type
+        if input.assembly_method() == "shortest_path":
+            ui.update_select("graph_type", selected="preliminary")
+        else:
+            ui.update_select("graph_type", selected="compressed")
+    
+    @output
+    @render.ui
+    def theme_css():
+        theme = input.app_theme()
+        if theme == "latte":
+            return ui.tags.style("""
+            body {
+                background-color: #eff1f5 !important;
+                color: #4c4f69 !important;
+            }
+            .well, .panel-well {
+                background-color: #e6e9ef !important;
+                border-color: #ccd0da !important;
+            }
+            .nav-tabs {
+                border-color: #ccd0da !important;
+            }
+            .nav-tabs > li.active > a {
+                background-color: #e6e9ef !important;
+                color: #4c4f69 !important;
+                border-color: #ccd0da !important;
+            }
+            .btn-primary {
+                background-color: #1e66f5 !important; /* Catppuccin blue */
+                border-color: #1e66f5 !important;
+            }
+            .selectize-dropdown .active {
+                background-color: #bcc0cc !important;
+                color: #4c4f69 !important;
+            }
+            .selectize-control.single .selectize-input {
+                background-color: #dce0e8 !important;
+                color: #4c4f69 !important;
+                border-color: #bcc0cc !important;
+            }
+            input, select {
+                background-color: #dce0e8 !important;
+                color: #4c4f69 !important;
+                border-color: #bcc0cc !important;
+            }
+            .radio-inline, .checkbox-inline {
+                background-color: #dce0e8 !important;
+                color: #4c4f69 !important;
+                padding: 5px 10px !important;
+                margin: 3px !important;
+                border-radius: 4px !important;
+                border: 1px solid #bcc0cc !important;
+            }
+            .radio-inline.active, .checkbox-inline.active {
+                background-color: #1e66f5 !important;
+                color: white !important;
+            }
+            a {
+                color: #1e66f5 !important; /* Catppuccin blue */
+            }
+            """)
+        elif theme == "mocha":
+            return ui.tags.style("""
+            body {
+                background-color: #1e1e2e !important;
+                color: #cdd6f4 !important;
+            }
+            .well, .panel-well {
+                background-color: #181825 !important;
+                border-color: #313244 !important;
+            }
+            .nav-tabs {
+                border-color: #313244 !important;
+            }
+            .nav-tabs > li.active > a {
+                background-color: #181825 !important;
+                color: #cdd6f4 !important;
+                border-color: #313244 !important;
+            }
+            .btn-primary {
+                background-color: #cba6f7 !important; /* Catppuccin purple */
+                border-color: #cba6f7 !important;
+            }
+            .selectize-dropdown .active {
+                background-color: #45475a !important;
+                color: #cdd6f4 !important;
+            }
+            .selectize-control.single .selectize-input {
+                background-color: #313244 !important;
+                color: #cdd6f4 !important;
+                border-color: #45475a !important;
+            }
+            input, select {
+                background-color: #313244 !important;
+                color: #cdd6f4 !important;
+                border-color: #45475a !important;
+            }
+            .radio-inline, .checkbox-inline {
+                background-color: #313244 !important;
+                color: #cdd6f4 !important;
+                padding: 5px 10px !important;
+                margin: 3px !important;
+                border-radius: 4px !important;
+                border: 1px solid #45475a !important;
+            }
+            .radio-inline.active, .checkbox-inline.active {
+                background-color: #cba6f7 !important;
+                color: #1e1e2e !important;
+            }
+            a {
+                color: #b4befe !important; /* Catppuccin lavender */
+            }
+            """)
+        else:
+            # Default slate theme styling
+            return ui.tags.style("""
+            .radio-inline, .checkbox-inline {
+                background-color: #444d56 !important;
+                color: #ffffff !important;
+                padding: 5px 10px !important;
+                margin: 3px !important;
+                border-radius: 4px !important;
+                border: 1px solid #555e67 !important;
+            }
+            .radio-inline.active, .checkbox-inline.active {
+                background-color: #007bff !important;
+                color: white !important;
+            }
+            """)
 
     @reactive.Effect
     @reactive.event(input.parquet_file_local, input.parquet_file, input.remote_path, input.input_type, input.system_prefix, input.sample_n_umis, input.sample_min_reads, input.sample_umis)
@@ -230,9 +401,12 @@ def server(input, output, session):
             return "No valid UMI selected"
         try:
             umi_reads = get_selected_umi_stats(data(), input.umi())
+            theme = input.app_theme()
+            text_color = "#4c4f69" if theme == "latte" else "#cdd6f4" if theme == "mocha" else "#ffffff"
+            
             return ui.HTML(f"""
-            Dataset: <span style="color: #ffffff;">{dataset()}</span>
-            Reads per UMI: <span style="color: #ffffff;">{umi_reads}</span>
+            Dataset: <span style="color: {text_color};">{dataset()}</span>
+            Reads per UMI: <span style="color: {text_color};">{umi_reads}</span>
             """
                        )
         except Exception as e:
@@ -247,6 +421,7 @@ def server(input, output, session):
     @output
     @render_plotly
     def reads_per_umi():
+        import plotly.express as px
         return create_reads_per_umi_plot(data())
 
     @reactive.Effect
@@ -272,6 +447,12 @@ def server(input, output, session):
                 end_anchor=input.end_anchor(),
             )
             
+            # Set the appropriate graph type based on assembly method
+            if input.assembly_method() == "shortest_path":
+                ui.update_select("graph_type", selected="preliminary")
+            else:
+                ui.update_select("graph_type", selected="compressed")
+                
             handle_assembly_result(result)
         except Exception as e:
             ui.notification_show(f"Error in regular assembly: {str(e)}", type="error")
@@ -347,13 +528,18 @@ def server(input, output, session):
             return "No assembly results available"
 
         read_count = data().filter(pl.col('umi') == input.umi()).height
+        theme = input.app_theme()
+        highlight_color = "#d20f39" if theme == "latte" else "#f38ba8" if theme == "mocha" else "#ff8080"  # Red
+        param_color = "#fe640b" if theme == "latte" else "#fab387" if theme == "mocha" else "#ffa07a"     # Orange/Peach
+        text_color = "#4c4f69" if theme == "latte" else "#cdd6f4" if theme == "mocha" else "#ffffff"     # Text
+        
         return ui.HTML(f"""
     Target UMI: <h4>{input.umi()}</h4>
     Assembly Method: {input.assembly_method()}
-    Contig Length: <span style="color: #ff8080;">{len(assembly_result())}</span> 
-    Input Reads: <span style="color: #ffffff;">{read_count}</span> 
-    K-mer Size: <span style="color: #ffa07a;">{input.kmer_size()}</span> 
-    Min Coverage: <span style="color: #ffa07a;">{input.min_coverage()}</span>"""
+    Contig Length: <span style="color: {highlight_color};">{len(assembly_result())}</span> 
+    Input Reads: <span style="color: {text_color};">{read_count}</span> 
+    K-mer Size: <span style="color: {param_color};">{input.kmer_size()}</span> 
+    Min Coverage: <span style="color: {param_color};">{input.min_coverage()}</span>"""
                        )
 
     @output
@@ -453,10 +639,10 @@ def server(input, output, session):
 
     @output
     @render_plotly
-    @reactive.event(input.umi, data, assembly_result)
+    @reactive.event(input.umi, data, assembly_result, input.app_theme)
     def coverage_plot():
         if data() is None or not input.umi() or input.umi() not in data()['umi']:
-            empty_fig = go.Figure(layout=DARK_TEMPLATE['layout'])
+            empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
                     height=500,
                     autosize=True,
@@ -494,7 +680,7 @@ def server(input, output, session):
                     )
 
             fig.update_layout(
-                    **DARK_TEMPLATE['layout'],
+                    **current_template()['layout'],
                     xaxis_title="Position",
                     yaxis_title="Coverage",
                     autosize=True,
@@ -525,10 +711,11 @@ def server(input, output, session):
 
     @output
     @render_plotly
+    @reactive.event(sweep_results, input.app_theme)
     def sweep_heatmap():
         if sweep_results() is None:
             # Create empty figure with specific dimensions
-            empty_fig = go.Figure(layout=DARK_TEMPLATE['layout'])
+            empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
                     height=500, 
                     autosize=True,
@@ -561,7 +748,7 @@ def server(input, output, session):
 
         fig.update_layout(
                 autosize=True,
-                **DARK_TEMPLATE['layout'],
+                **current_template()['layout'],
                 xaxis_title="Minimum Coverage",
                 yaxis_title="K-mer Size",
                 coloraxis_colorbar_title="Contig Length"
@@ -575,10 +762,13 @@ def server(input, output, session):
 
     @output
     @render_plotly
-    @reactive.event(input.use_weighted, input.draw_graph, input.assemble)
+    @reactive.event(input.use_weighted, input.draw_graph, input.assemble, input.app_theme, 
+                   input.separate_components, input.component_padding, input.min_component_size,
+                   input.layout_k, input.layout_iterations, input.layout_scale,
+                   input.weight_method, input.graph_type)
     def assembly_graph():
         if assembly_result() is None:
-            empty_fig = go.Figure(layout=DARK_TEMPLATE['layout'])
+            empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
                     height=1000,
                     autosize=True,
@@ -603,7 +793,7 @@ def server(input, output, session):
 
         if not Path(graph_path).exists():
             print(f"Graph file not found: {graph_path}")
-            empty_fig = go.Figure(layout=DARK_TEMPLATE['layout'])
+            empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
                     height=1000,
                     autosize=True,
@@ -624,28 +814,70 @@ def server(input, output, session):
             path_nodes = path_results().get('path_nodes')
 
         # Create graph visualization
-        fig = create_graph_plot(
-                graph_path, 
-                dark_mode=True,
-                line_shape='linear',
-                graph_type=input.graph_type(),
-                path_nodes=path_nodes,
-                weighted=input.use_weighted(),
-                weight_method=input.weight_method(),
-                spring_args={
-                    'k':input.layout_k(),
-                    'iterations':input.layout_iterations(),
-                    'scale':input.layout_scale(),
-                    },
-                )
+        dark_mode = input.app_theme() != "latte"  # Only latte is light mode
+        try:
+            fig = create_graph_plot(
+                    graph_path, 
+                    dark_mode=dark_mode,
+                    line_shape='linear',
+                    graph_type=input.graph_type(),
+                    path_nodes=path_nodes,
+                    weighted=input.use_weighted(),
+                    weight_method=input.weight_method(),
+                    separate_components=input.separate_components(),
+                    component_padding=input.component_padding(),
+                    min_component_size=input.min_component_size(),
+                    spring_args={
+                        'k':input.layout_k(),
+                        'iterations':input.layout_iterations(),
+                        'scale':input.layout_scale(),
+                        },
+                    debug=True
+                    )
+            
+            # Ensure we have a valid figure
+            if not isinstance(fig, go.Figure):
+                print(f"Error: create_graph_plot returned {type(fig)} instead of a Figure")
+                fig = go.Figure()
+                fig.update_layout(
+                        autosize=True,
+                        **current_template()['layout'],
+                        annotations=[dict(
+                            text=f"Error creating graph: Invalid return type {type(fig)}",
+                            xref="paper",
+                            yref="paper",
+                            x=0.5,
+                            y=0.5,
+                            showarrow=False,
+                            font=dict(color='#ffffff', size=14)
+                            )]
+                        )
+        except Exception as e:
+            print(f"Error in create_graph_plot: {str(e)}")
+            fig = go.Figure()
+            fig.update_layout(
+                    autosize=True,
+                    **current_template()['layout'],
+                    annotations=[dict(
+                        text=f"Error creating graph: {str(e)}",
+                        xref="paper",
+                        yref="paper",
+                        x=0.5,
+                        y=0.5,
+                        showarrow=False,
+                        font=dict(color='#ffffff', size=14)
+                        )]
+                    )
 
+        # This block is now redundant as we handle None in the try/except block above
+        # Just make sure fig is not None in case something unexpected happens
         if fig is None:
             fig = go.Figure()
             fig.update_layout(
                     autosize=True,
-                    **DARK_TEMPLATE['layout'],
+                    **current_template()['layout'],
                     annotations=[dict(
-                        text="Error loading assembly graph",
+                        text="Error: graph creation returned None",
                         xref="paper",
                         yref="paper",
                         x=0.5,

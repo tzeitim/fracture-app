@@ -36,7 +36,7 @@ def create_data_input_sidebar(system_prefixes=None):
                 "remote": "Remote File Path",
                 "local": "Local File Path"
                 },
-            selected="remote"
+            selected="local"
             ),
         ui.panel_conditional(
             "input.input_type === 'remote'",
@@ -146,6 +146,27 @@ def create_graph_controls():
             ),
         ui.panel_well(
             ui.h4("Graph Layout Parameters"),
+            ui.input_switch(
+                "separate_components",
+                "Separate Disjoint Graphs",
+                value=False
+                ),
+            ui.input_numeric(
+                "component_padding",
+                "Component Spacing",
+                value=3.0,
+                min=0.5,
+                max=10.0,
+                step=0.5
+                ),
+            ui.input_numeric(
+                "min_component_size",
+                "Min Component Size",
+                value=3,
+                min=1,
+                max=20,
+                step=1
+                ),
             ui.input_numeric(
                 "layout_k",
                 "Node Spacing (k)",
@@ -227,4 +248,27 @@ def create_parameter_sweep_controls():
             class_="btn-primary"
             ),
         ui.hr(),
+    )
+
+def create_theme_controls():
+    """Create theme selection controls"""
+    return ui.div(
+        ui.h4("App Theme"),
+        ui.p("Select a color theme for the application interface:"),
+        ui.input_radio_buttons(
+            "app_theme",
+            "Select Theme",
+            {
+                "slate": "Slate (Default)",
+                "latte": "Catppuccin Latte (Light)",
+                "mocha": "Catppuccin Mocha (Dark)"
+            },
+            selected="slate",
+            inline=False,  # Stack vertically for better visibility
+            width="100%"   # Ensure full width
+        ),
+        ui.div(
+            ui.p("Changes are applied immediately across the entire application."),
+            style="margin-top: 20px; font-style: italic;"
+        )
     )
