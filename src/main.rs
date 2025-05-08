@@ -1,6 +1,7 @@
 use std::error::Error;
-use std::io::stdout;
+use std::io::{stdout, stdin, Write};
 use std::time::Duration;
+use std::path::{Path, PathBuf};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -14,13 +15,46 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
+// Represents the application modes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppMode {
+    SampleSelection,
+    MainMenu,
+    DirectoryPrompt, // New mode for directory prompt popup
+}
+
+// For popup states
+#[derive(Debug)]
+enum PopupState {
+    Hidden,
+    DirectoryInput {
+        input: String,
+        cursor_position: usize,
+        message: String,
+    },
+    DirectoryConfirmation {
+        directory: PathBuf,
+        message: String,
+    },
+}
+
 // Define our app state
 struct App {
+    // Application mode
+    mode: AppMode,
+    // Sample selection state
+    samples: Vec<PathBuf>,
+    sample_selection_state: ListState,
+    selected_sample: Option<PathBuf>,
     // Navigation state
     menu_stack: Vec<Menu>,
     current_menu_state: ListState,
     // Whether the app should exit
     should_quit: bool,
+    // Popup state for UI input prompts
+    popup: PopupState,
+    // Directory where experiments are located
+    experiment_dir: Option<PathBuf>,
 }
 
 // Define menu items
@@ -45,7 +79,7 @@ struct Menu {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(experiment_dir_option: Option<PathBuf>) -> Self {
         // Create our menu structure
         
         // System Information submenu
@@ -172,17 +206,201 @@ impl App {
             ],
         };
 
-        // Initialize with main menu
+        // Set initial mode based on whether we have a directory
+        let initial_mode = match &experiment_dir_option {
+            Some(dir) if dir.exists() => AppMode::SampleSelection,
+            _ => AppMode::DirectoryPrompt, // Start with directory prompt if no valid directory
+        };
+        
+        // Determine initial samples list (empty if no directory provided)
+        let samples = match &experiment_dir_option {
+            Some(dir) if dir.exists() => Self::scan_for_samples(dir),
+            _ => Vec::new(), // Empty samples list if no directory
+        };
+        
+        // Initialize app state
         let mut app = Self {
+            mode: initial_mode,
+            samples,
+            sample_selection_state: ListState::default(),
+            selected_sample: None,
             menu_stack: vec![main_menu],
             current_menu_state: ListState::default(),
             should_quit: false,
+            popup: PopupState::DirectoryInput {
+                input: String::new(),
+                cursor_position: 0,
+                message: "Enter the experiment directory path:".to_string(),
+            },
+            experiment_dir: experiment_dir_option,
         };
         
-        // Select the first item by default
-        app.current_menu_state.select(Some(0));
+        // Select the first sample by default if available
+        if !app.samples.is_empty() {
+            app.sample_selection_state.select(Some(0));
+        }
         
         app
+    }
+    
+    // Scan the experiment directory for samples that have pipeline-summary.json files
+    fn scan_for_samples(experiment_dir: &Path) -> Vec<PathBuf> {
+        let mut samples = Vec::new();
+        
+        // Check if the experiment directory exists
+        if !experiment_dir.exists() {
+            // Return empty samples list if the directory doesn't exist
+            return samples;
+        }
+        
+        // Use a glob pattern to find all json files in subdirectories
+        let pattern = format!("{}/*/*.json", experiment_dir.display());
+        
+        if let Ok(entries) = glob::glob(&pattern) {
+            for entry in entries.filter_map(Result::ok) {
+                // Check if the file name is pipeline-summary.json
+                if entry.file_name().unwrap_or_default() == "pipeline-summary.json" {
+                    // Get the parent directory which represents a sample
+                    if let Some(sample_dir) = entry.parent() {
+                        samples.push(sample_dir.to_path_buf());
+                    }
+                }
+            }
+        }
+        
+        // If no samples found, add a mock sample for testing
+        if samples.is_empty() && cfg!(debug_assertions) {
+            // For development/testing purposes - create a mock sample
+            samples.push(PathBuf::from("/mock/sample1"));
+            samples.push(PathBuf::from("/mock/sample2"));
+        }
+        
+        // Sort samples by name for consistent display
+        samples.sort();
+        
+        samples
+    }
+    
+    // Select the current sample and switch to the main menu mode
+    fn select_sample(&mut self) {
+        if let Some(selected) = self.sample_selection_state.selected() {
+            if selected < self.samples.len() {
+                self.selected_sample = Some(self.samples[selected].clone());
+                self.mode = AppMode::MainMenu;
+                
+                // Select the first menu item in the main menu
+                self.current_menu_state.select(Some(0));
+            }
+        }
+    }
+    
+    // Return to the sample selection screen
+    fn back_to_sample_selection(&mut self) {
+        self.mode = AppMode::SampleSelection;
+        self.selected_sample = None;
+    }
+    
+    // Methods for handling directory input popup
+    
+    // Add a character to the directory input
+    fn input_add_char(&mut self, c: char) {
+        if let PopupState::DirectoryInput { input, cursor_position, .. } = &mut self.popup {
+            input.insert(*cursor_position, c);
+            *cursor_position += 1;
+        }
+    }
+    
+    // Delete a character from the directory input
+    fn input_delete_char(&mut self) {
+        if let PopupState::DirectoryInput { input, cursor_position, .. } = &mut self.popup {
+            if *cursor_position > 0 {
+                *cursor_position -= 1;
+                input.remove(*cursor_position);
+            }
+        }
+    }
+    
+    // Move cursor left in the directory input
+    fn input_move_cursor_left(&mut self) {
+        if let PopupState::DirectoryInput { cursor_position, .. } = &mut self.popup {
+            if *cursor_position > 0 {
+                *cursor_position -= 1;
+            }
+        }
+    }
+    
+    // Move cursor right in the directory input
+    fn input_move_cursor_right(&mut self) {
+        if let PopupState::DirectoryInput { input, cursor_position, .. } = &mut self.popup {
+            if *cursor_position < input.len() {
+                *cursor_position += 1;
+            }
+        }
+    }
+    
+    // Submit the directory input and check if it's valid
+    fn submit_directory_input(&mut self) {
+        if let PopupState::DirectoryInput { input, .. } = &self.popup {
+            let input_str = input.clone();
+            
+            // Expand the path (handle ~ in paths)
+            let expanded_path = shellexpand::tilde(&input_str);
+            let path = PathBuf::from(expanded_path.as_ref());
+            
+            // Check if the directory exists
+            if path.exists() {
+                // Directory exists, continue to sample selection
+                self.experiment_dir = Some(path.clone());
+                self.samples = Self::scan_for_samples(&path);
+                if !self.samples.is_empty() {
+                    self.sample_selection_state.select(Some(0));
+                }
+                self.mode = AppMode::SampleSelection;
+                self.popup = PopupState::Hidden;
+            } else {
+                // Directory doesn't exist, ask if we should create it
+                self.popup = PopupState::DirectoryConfirmation {
+                    directory: path.clone(),
+                    message: format!("Directory '{}' does not exist. Create it?", path.display()),
+                };
+            }
+        }
+    }
+    
+    // Handle confirmation response for directory creation
+    fn handle_directory_confirmation(&mut self, confirm: bool) {
+        if let PopupState::DirectoryConfirmation { directory, .. } = &self.popup {
+            let dir_path = directory.clone();
+            
+            if confirm {
+                // Create the directory
+                if let Err(e) = std::fs::create_dir_all(&dir_path) {
+                    // Creation failed, show error message
+                    self.popup = PopupState::DirectoryInput {
+                        input: dir_path.to_string_lossy().to_string(),
+                        cursor_position: dir_path.to_string_lossy().len(),
+                        message: format!("Error creating directory: {}", e),
+                    };
+                    return;
+                }
+                
+                // Directory created, continue to sample selection
+                self.experiment_dir = Some(dir_path.clone());
+                self.samples = Self::scan_for_samples(&dir_path);
+                if !self.samples.is_empty() {
+                    self.sample_selection_state.select(Some(0));
+                }
+                self.mode = AppMode::SampleSelection;
+                self.popup = PopupState::Hidden;
+            } else {
+                // User declined to create directory, return to input
+                self.popup = PopupState::DirectoryInput {
+                    input: dir_path.to_string_lossy().to_string(),
+                    cursor_position: dir_path.to_string_lossy().len(),
+                    message: "Enter the experiment directory path:".to_string(),
+                };
+            }
+        }
     }
 
     fn current_menu(&self) -> &Menu {
@@ -191,67 +409,354 @@ impl App {
     }
 
     fn handle_enter(&mut self) {
-        if let Some(selected) = self.current_menu_state.selected() {
-            match &self.current_menu().items[selected].kind {
-                MenuItemKind::Submenu(submenu) => {
-                    // Clone the submenu and push it to the stack
-                    let submenu_clone = Menu {
-                        title: submenu.title.clone(),
-                        items: submenu.items.clone(),
-                    };
-                    self.menu_stack.push(submenu_clone);
-                    
-                    // Reset selection for the new menu
-                    self.current_menu_state.select(Some(0));
+        match self.mode {
+            AppMode::DirectoryPrompt => {
+                match &self.popup {
+                    PopupState::DirectoryInput { .. } => {
+                        self.submit_directory_input();
+                    }
+                    PopupState::DirectoryConfirmation { .. } => {
+                        self.handle_directory_confirmation(true); // Confirm directory creation
+                    }
+                    _ => {}
                 }
-                MenuItemKind::Action(action) => {
-                    // Execute the action
-                    action(self);
+            }
+            AppMode::SampleSelection => {
+                self.select_sample();
+            }
+            AppMode::MainMenu => {
+                if let Some(selected) = self.current_menu_state.selected() {
+                    match &self.current_menu().items[selected].kind {
+                        MenuItemKind::Submenu(submenu) => {
+                            // Clone the submenu and push it to the stack
+                            let submenu_clone = Menu {
+                                title: submenu.title.clone(),
+                                items: submenu.items.clone(),
+                            };
+                            self.menu_stack.push(submenu_clone);
+                            
+                            // Reset selection for the new menu
+                            self.current_menu_state.select(Some(0));
+                        }
+                        MenuItemKind::Action(action) => {
+                            // Execute the action
+                            action(self);
+                        }
+                    }
                 }
             }
         }
     }
 
     fn go_back(&mut self) {
-        if self.menu_stack.len() > 1 {
-            // Remove the current menu from the stack
-            self.menu_stack.pop();
-            
-            // Reset selection for the previous menu
-            self.current_menu_state.select(Some(0));
+        match self.mode {
+            AppMode::DirectoryPrompt => {
+                match &self.popup {
+                    PopupState::DirectoryConfirmation { .. } => {
+                        self.handle_directory_confirmation(false); // Cancel directory creation
+                    }
+                    _ => {
+                        // Pressing Escape in the directory input prompt will quit the app
+                        self.should_quit = true;
+                    }
+                }
+            }
+            AppMode::SampleSelection => {
+                if self.experiment_dir.is_none() {
+                    // If we're at the sample selection screen without an experiment dir,
+                    // go back to directory prompt
+                    self.mode = AppMode::DirectoryPrompt;
+                    self.popup = PopupState::DirectoryInput {
+                        input: String::new(),
+                        cursor_position: 0,
+                        message: "Enter the experiment directory path:".to_string(),
+                    };
+                } else {
+                    // Otherwise quit the app
+                    self.should_quit = true;
+                }
+            }
+            AppMode::MainMenu => {
+                if self.menu_stack.len() > 1 {
+                    // Remove the current menu from the stack
+                    self.menu_stack.pop();
+                    
+                    // Reset selection for the previous menu
+                    self.current_menu_state.select(Some(0));
+                } else {
+                    // If we're at the main menu's top level, go back to sample selection
+                    self.back_to_sample_selection();
+                }
+            }
+        }
+    }
+    
+    // Handle keyboard character input
+    fn handle_char(&mut self, c: char) {
+        if self.mode == AppMode::DirectoryPrompt {
+            if let PopupState::DirectoryInput { .. } = &self.popup {
+                if c.is_ascii_graphic() || c == ' ' || c == '/' || c == '\\' || c == '~' || c == '.' {
+                    self.input_add_char(c);
+                }
+            }
         }
     }
 
     fn next(&mut self) {
-        let items = &self.current_menu().items;
-        if !items.is_empty() {
-            let i = match self.current_menu_state.selected() {
-                Some(i) => (i + 1) % items.len(),
-                None => 0,
-            };
-            self.current_menu_state.select(Some(i));
+        match self.mode {
+            AppMode::DirectoryPrompt => {
+                // No navigation in directory prompt
+            }
+            AppMode::SampleSelection => {
+                // Navigate through samples
+                if !self.samples.is_empty() {
+                    let i = match self.sample_selection_state.selected() {
+                        Some(i) => (i + 1) % self.samples.len(),
+                        None => 0,
+                    };
+                    self.sample_selection_state.select(Some(i));
+                }
+            }
+            AppMode::MainMenu => {
+                // Navigate through menu items
+                let items = &self.current_menu().items;
+                if !items.is_empty() {
+                    let i = match self.current_menu_state.selected() {
+                        Some(i) => (i + 1) % items.len(),
+                        None => 0,
+                    };
+                    self.current_menu_state.select(Some(i));
+                }
+            }
         }
     }
 
     fn previous(&mut self) {
-        let items = &self.current_menu().items;
-        if !items.is_empty() {
-            let i = match self.current_menu_state.selected() {
-                Some(i) => {
-                    if i == 0 {
-                        items.len() - 1
-                    } else {
-                        i - 1
-                    }
+        match self.mode {
+            AppMode::DirectoryPrompt => {
+                // No navigation in directory prompt
+            }
+            AppMode::SampleSelection => {
+                // Navigate through samples
+                if !self.samples.is_empty() {
+                    let i = match self.sample_selection_state.selected() {
+                        Some(i) => {
+                            if i == 0 {
+                                self.samples.len() - 1
+                            } else {
+                                i - 1
+                            }
+                        }
+                        None => 0,
+                    };
+                    self.sample_selection_state.select(Some(i));
                 }
-                None => 0,
-            };
-            self.current_menu_state.select(Some(i));
+            }
+            AppMode::MainMenu => {
+                // Navigate through menu items
+                let items = &self.current_menu().items;
+                if !items.is_empty() {
+                    let i = match self.current_menu_state.selected() {
+                        Some(i) => {
+                            if i == 0 {
+                                items.len() - 1
+                            } else {
+                                i - 1
+                            }
+                        }
+                        None => 0,
+                    };
+                    self.current_menu_state.select(Some(i));
+                }
+            }
         }
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+use clap::Parser;
+
+/// Command line arguments structure
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Pipeline interface")]
+struct Args {
+    /// Path to the experiment directory (if not provided, will prompt for input)
+    #[arg(short, long)]
+    experiment_dir: Option<String>,
+    
+    /// Run in command-line mode without TUI
+    #[arg(long, default_value_t = false)]
+    no_tui: bool,
+}
+
+/// Prompt the user to input an experiment directory path
+fn prompt_for_experiment_dir() -> String {
+    println!("No experiment directory provided.");
+    println!("Please enter the path to the experiment directory:");
+    print!("> ");
+    stdout().flush().unwrap(); // Ensure the prompt is displayed
+    
+    let mut input = String::new();
+    stdin().read_line(&mut input).expect("Failed to read line");
+    
+    // Trim whitespace and return
+    input.trim().to_string()
+}
+
+/// Validate the experiment directory path and return a PathBuf
+fn get_valid_experiment_dir(dir_option: Option<String>) -> PathBuf {
+    // If directory was provided via args, use it
+    let dir_string = match dir_option {
+        Some(path) => path,
+        None => prompt_for_experiment_dir(),
+    };
+    
+    // Expand the path (handle ~ in paths)
+    let expanded_path = shellexpand::tilde(&dir_string);
+    let path = PathBuf::from(expanded_path.as_ref());
+    
+    // Check if the directory exists
+    if !path.exists() {
+        // If it doesn't exist, ask if we should create it
+        println!("Directory '{}' does not exist.", path.display());
+        println!("Would you like to create it? (y/n)");
+        print!("> ");
+        stdout().flush().unwrap();
+        
+        let mut input = String::new();
+        stdin().read_line(&mut input).expect("Failed to read line");
+        
+        if input.trim().to_lowercase() == "y" {
+            // Create the directory
+            std::fs::create_dir_all(&path).expect("Failed to create directory");
+            println!("Created directory: {}", path.display());
+        } else {
+            // If user doesn't want to create it, use the current directory
+            println!("Using current directory instead.");
+            return PathBuf::from(".");
+        }
+    }
+    
+    path
+}
+
+fn main() {
+    // Parse command-line arguments
+    let args = Args::parse();
+    
+    // Process the experiment directory path if provided
+    let experiment_dir_option = args.experiment_dir.as_ref().map(|path_str| {
+        let expanded_path = shellexpand::tilde(path_str);
+        PathBuf::from(expanded_path.as_ref())
+    }).unwrap_or_else(|| PathBuf::from("."));
+    
+    // Check if the TUI mode should be avoided (useful when running in environments that don't support TUI)
+    if args.no_tui {
+        run_cli_mode(experiment_dir_option);
+    } else {
+        // Try running in TUI mode, fallback to CLI mode if it fails
+        if let Err(err) = run_app(args.experiment_dir) {
+            // Clean up terminal even if there's an error
+            let _ = disable_raw_mode();
+            let _ = execute!(stdout(), LeaveAlternateScreen);
+            
+            // Print the error
+            eprintln!("Error: {}", err);
+            
+            // Check if it's a terminal compatibility issue
+            if err.to_string().contains("Device not configured") {
+                eprintln!("\nThis application requires a compatible terminal. Falling back to command-line mode...\n");
+                run_cli_mode(experiment_dir_option);
+            } else {
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+// Command-line mode for non-interactive environments
+fn run_cli_mode(experiment_dir_option: PathBuf) {
+    println!("Running in command-line mode");
+    
+    // Get the experiment directory from input if not provided
+    let experiment_dir = if !experiment_dir_option.exists() {
+        println!("Experiment directory '{}' does not exist or was not provided.", experiment_dir_option.display());
+        println!("Please enter the experiment directory path:");
+        
+        let mut input = String::new();
+        stdin().read_line(&mut input).expect("Failed to read line");
+        let input = input.trim();
+        
+        let expanded_path = shellexpand::tilde(input);
+        let dir_path = PathBuf::from(expanded_path.as_ref());
+        
+        if !dir_path.exists() {
+            println!("Directory '{}' does not exist. Would you like to create it? (y/n)", dir_path.display());
+            
+            let mut confirm = String::new();
+            stdin().read_line(&mut confirm).expect("Failed to read line");
+            
+            if confirm.trim().to_lowercase() == "y" {
+                match std::fs::create_dir_all(&dir_path) {
+                    Ok(_) => {
+                        println!("Created directory: {}", dir_path.display());
+                        dir_path
+                    }
+                    Err(e) => {
+                        println!("Error creating directory: {}", e);
+                        println!("Using current directory instead.");
+                        PathBuf::from(".")
+                    }
+                }
+            } else {
+                println!("Using current directory instead.");
+                PathBuf::from(".")
+            }
+        } else {
+            dir_path
+        }
+    } else {
+        experiment_dir_option
+    };
+    
+    println!("Experiment directory: {}", experiment_dir.display());
+    
+    // Scan for samples
+    let samples = App::scan_for_samples(&experiment_dir);
+    
+    if samples.is_empty() {
+        println!("No samples found in the experiment directory.");
+        return;
+    }
+    
+    println!("\nAvailable samples:");
+    for (i, sample) in samples.iter().enumerate() {
+        let sample_name = sample.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Unknown Sample");
+        
+        println!("{}. {}", i + 1, sample_name);
+    }
+    
+    println!("\nIn the TUI mode, you would select a sample and then access the pipeline interface menu.");
+    println!("This command-line version is provided as a fallback for environments that don't support TUI applications.");
+}
+
+fn run_app(dir_option: Option<String>) -> Result<(), Box<dyn Error>> {
+    // Convert the string path to PathBuf if provided
+    let experiment_dir_option = dir_option.map(|path_str| {
+        let expanded_path = shellexpand::tilde(&path_str);
+        PathBuf::from(expanded_path.as_ref())
+    });
+    
+    // Print starting message
+    println!("Starting pipeline interface...");
+    if let Some(dir) = &experiment_dir_option {
+        println!("Experiment directory: {}", dir.display());
+    } else {
+        println!("No experiment directory provided. Will prompt for one.");
+    }
+    
+    // Setup panic hook for proper terminal cleanup
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic| {
         // Restore terminal to normal state
@@ -261,6 +766,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Call the original panic hook
         hook(panic);
     }));
+    
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -268,8 +774,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app state
-    let mut app = App::new();
+    // Create app state with the experiment directory option
+    let mut app = App::new(experiment_dir_option);
 
     // Main loop
     while !app.should_quit {
@@ -284,17 +790,49 @@ fn main() -> Result<(), Box<dyn Error>> {
                         KeyCode::Char('q') => {
                             app.should_quit = true;
                         }
-                        KeyCode::Char('j') | KeyCode::Down => {
+                        KeyCode::Char(c) => {
+                            app.handle_char(c);
+                            
+                            if c == 'j' || c == 'k' {
+                                match c {
+                                    'j' => app.next(),
+                                    'k' => app.previous(),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        KeyCode::Down => {
                             app.next();
                         }
-                        KeyCode::Char('k') | KeyCode::Up => {
+                        KeyCode::Up => {
                             app.previous();
                         }
-                        KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace | KeyCode::Esc => {
-                            app.go_back();
+                        KeyCode::Left => {
+                            if app.mode == AppMode::DirectoryPrompt {
+                                app.input_move_cursor_left();
+                            } else {
+                                app.go_back();
+                            }
                         }
-                        KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => {
+                        KeyCode::Right => {
+                            if app.mode == AppMode::DirectoryPrompt {
+                                app.input_move_cursor_right();
+                            } else {
+                                app.handle_enter();
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            if app.mode == AppMode::DirectoryPrompt {
+                                app.input_delete_char();
+                            } else {
+                                app.go_back();
+                            }
+                        }
+                        KeyCode::Enter => {
                             app.handle_enter();
+                        }
+                        KeyCode::Esc => {
+                            app.go_back();
                         }
                         _ => {}
                     }
@@ -317,20 +855,214 @@ fn ui(frame: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Title area
-            Constraint::Min(0),    // Menu area
+            Constraint::Min(0),    // Menu/sample area
             Constraint::Length(1), // Bottom gap
             Constraint::Length(3), // Controls help
         ])
         .split(frame.size());
 
-    // Get the current menu
-    let menu = app.current_menu();
+    match app.mode {
+        AppMode::DirectoryPrompt => {
+            // Just render a blank background for the directory prompt
+            frame.render_widget(
+                Block::default()
+                    .borders(Borders::NONE)
+                    .style(Style::default().fg(Color::White).bg(Color::Black)),
+                frame.size(),
+            );
+            
+            // Render the directory prompt as a popup
+            render_directory_prompt(frame, app);
+        }
+        AppMode::SampleSelection => {
+            // Render the sample selection interface
+            render_sample_selection(frame, app, &chunks);
+        }
+        AppMode::MainMenu => {
+            // Render the main menu interface
+            render_main_menu(frame, app, &chunks);
+        }
+    }
+}
 
+fn render_directory_prompt(frame: &mut Frame, app: &App) {
+    let area = frame.size();
+    
+    // Calculate popup dimensions and position
+    let popup_width = area.width.min(60);
+    let popup_height = 6;
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    
+    match &app.popup {
+        PopupState::DirectoryInput { input, cursor_position, message } => {
+            // Render the input popup
+            let popup_block = Block::default()
+                .title("Directory Input")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+            
+            // Create layout for the popup content
+            let popup_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([
+                    Constraint::Length(1), // Message
+                    Constraint::Length(1), // Input field
+                    Constraint::Length(1), // Instructions
+                ])
+                .split(popup_area);
+            
+            // Render the popup block
+            frame.render_widget(popup_block, popup_area);
+            
+            // Render the message
+            let message_paragraph = Paragraph::new(message.clone())
+                .style(Style::default().fg(Color::White))
+                .alignment(Alignment::Left);
+            frame.render_widget(message_paragraph, popup_chunks[0]);
+            
+            // Render the input field
+            let input_text = format!("{} ", input); // Add space for cursor
+            let input_paragraph = Paragraph::new(input_text.clone())
+                .style(Style::default().fg(Color::White))
+                .alignment(Alignment::Left);
+            frame.render_widget(input_paragraph, popup_chunks[1]);
+            
+            // Position the cursor
+            if let Some(layout_area) = popup_chunks.get(1) {
+                frame.set_cursor(
+                    layout_area.x + *cursor_position as u16,
+                    layout_area.y,
+                );
+            }
+            
+            // Render instructions
+            let instructions = "Press Enter to submit, Esc to quit";
+            let instructions_paragraph = Paragraph::new(instructions)
+                .style(Style::default().fg(Color::Yellow))
+                .alignment(Alignment::Center);
+            frame.render_widget(instructions_paragraph, popup_chunks[2]);
+        }
+        PopupState::DirectoryConfirmation { directory, message } => {
+            // Render the confirmation popup
+            let popup_block = Block::default()
+                .title("Confirmation")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+            
+            // Create layout for the popup content
+            let popup_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints([
+                    Constraint::Length(1), // Message
+                    Constraint::Length(1), // Directory
+                    Constraint::Length(1), // Instructions
+                ])
+                .split(popup_area);
+            
+            // Render the popup block
+            frame.render_widget(popup_block, popup_area);
+            
+            // Render the message
+            let message_paragraph = Paragraph::new(message.clone())
+                .style(Style::default().fg(Color::White))
+                .alignment(Alignment::Left);
+            frame.render_widget(message_paragraph, popup_chunks[0]);
+            
+            // Render the directory path
+            let dir_text = format!("Path: {}", directory.display());
+            let dir_paragraph = Paragraph::new(dir_text)
+                .style(Style::default().fg(Color::Green))
+                .alignment(Alignment::Left);
+            frame.render_widget(dir_paragraph, popup_chunks[1]);
+            
+            // Render instructions
+            let instructions = "Press Enter to confirm, Esc to cancel";
+            let instructions_paragraph = Paragraph::new(instructions)
+                .style(Style::default().fg(Color::Yellow))
+                .alignment(Alignment::Center);
+            frame.render_widget(instructions_paragraph, popup_chunks[2]);
+        }
+        _ => {}
+    }
+}
+
+fn render_sample_selection(frame: &mut Frame, app: &mut App, chunks: &[Rect]) {
     // Render the title
     let title_block = Block::default()
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::Cyan));
-    let title = Paragraph::new(menu.title.clone())
+    let title = Paragraph::new("Sample Selection")
+        .block(title_block)
+        .alignment(Alignment::Center);
+    frame.render_widget(title, chunks[0]);
+
+    // Create the sample items
+    let items: Vec<ListItem> = if app.samples.is_empty() {
+        vec![ListItem::new("No samples found. Please check the experiment directory.")]
+    } else {
+        app.samples
+            .iter()
+            .map(|path| {
+                // Extract only the sample name (directory name) for display
+                let sample_name = path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Unknown Sample");
+                
+                ListItem::new(sample_name.to_string())
+                    .style(Style::default().fg(Color::White))
+            })
+            .collect()
+    };
+
+    // Create a List from the items
+    let items_list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Available Samples"))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    // Render the samples with their state
+    frame.render_stateful_widget(items_list, chunks[1], &mut app.sample_selection_state);
+
+    // Render the controls help
+    let controls = vec![
+        "↑/↓: Navigate",
+        "Enter: Select Sample",
+        "q: Quit",
+    ];
+    let controls_text = controls.join(" | ");
+    let controls_paragraph = Paragraph::new(controls_text)
+        .block(Block::default().borders(Borders::ALL))
+        .alignment(Alignment::Center);
+    frame.render_widget(controls_paragraph, chunks[3]);
+}
+
+fn render_main_menu(frame: &mut Frame, app: &mut App, chunks: &[Rect]) {
+    // Get the current menu
+    let menu = app.current_menu();
+
+    // Get the selected sample name (if available)
+    let sample_name = app.selected_sample
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("Unknown Sample");
+
+    // Render the title with the selected sample
+    let title_block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::Cyan));
+    let title_text = format!("{} - Sample: {}", menu.title, sample_name);
+    let title = Paragraph::new(title_text)
         .block(title_block)
         .alignment(Alignment::Center);
     frame.render_widget(title, chunks[0]);
