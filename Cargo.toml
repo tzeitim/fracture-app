@@ -1,0 +1,11 @@
+[package]
+name = "bios-menu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.26.0"
+crossterm = "0.27.0"
+
+[profile.release]
+panic = 'abort'
