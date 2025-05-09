@@ -89,7 +89,7 @@ impl App {
 
         // System Information submenu
         let system_info_menu = Menu {
-            title: "System Information".to_string(),
+            title: "System Information 1".to_string(),
             items: vec![
                 MenuItem {
                     title: "CPU Information".to_string(),
@@ -183,7 +183,7 @@ impl App {
             title: "Main Menu".to_string(),
             items: vec![
                 MenuItem {
-                    title: "System Information".to_string(),
+                    title: "System Information 2".to_string(),
                     kind: MenuItemKind::Submenu(system_info_menu),
                 },
                 MenuItem {
