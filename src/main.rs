@@ -36,6 +36,9 @@ enum PopupState {
         directory: PathBuf,
         message: String,
     },
+    DiagnosticsLog {
+        log_entries: Vec<String>,
+    },
 }
 
 // Define our app state
@@ -207,15 +210,19 @@ impl App {
         };
 
         // Set initial mode based on whether we have a directory
-        let initial_mode = match &experiment_dir_option {
-            Some(dir) if dir.exists() => AppMode::SampleSelection,
-            _ => AppMode::DirectoryPrompt, // Start with directory prompt if no valid directory
+        let (initial_mode, initial_input) = match &experiment_dir_option {
+            Some(dir) if dir.exists() => (AppMode::SampleSelection, String::new()),
+            Some(dir) => (
+                AppMode::DirectoryPrompt, 
+                dir.to_string_lossy().to_string()
+            ),
+            None => (AppMode::DirectoryPrompt, String::new()),
         };
         
-        // Determine initial samples list (empty if no directory provided)
-        let samples = match &experiment_dir_option {
+        // Determine initial samples list and diagnostics log (empty if no directory provided)
+        let (samples, log_entries) = match &experiment_dir_option {
             Some(dir) if dir.exists() => Self::scan_for_samples(dir),
-            _ => Vec::new(), // Empty samples list if no directory
+            _ => (Vec::new(), Vec::new()), // Empty samples list if no directory
         };
         
         // Initialize app state
@@ -227,10 +234,19 @@ impl App {
             menu_stack: vec![main_menu],
             current_menu_state: ListState::default(),
             should_quit: false,
-            popup: PopupState::DirectoryInput {
-                input: String::new(),
-                cursor_position: 0,
-                message: "Enter the experiment directory path:".to_string(),
+            popup: {
+                if !log_entries.is_empty() {
+                    PopupState::DiagnosticsLog {
+                        log_entries,
+                    }
+                } else {
+                    let input_len = initial_input.len();
+                    PopupState::DirectoryInput {
+                        input: initial_input,
+                        cursor_position: input_len,
+                        message: "Enter the experiment directory path:".to_string(),
+                    }
+                }
             },
             experiment_dir: experiment_dir_option,
         };
@@ -243,33 +259,53 @@ impl App {
         app
     }
     
-    // Scan the experiment directory for samples that have pipeline-summary.json files
-    fn scan_for_samples(experiment_dir: &Path) -> Vec<PathBuf> {
+    // Scan the experiment directory for samples that have pipeline_summary.json files
+    fn scan_for_samples(experiment_dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
         let mut samples = Vec::new();
+        let mut log_entries = Vec::new();
         
         // Check if the experiment directory exists
         if !experiment_dir.exists() {
-            // Return empty samples list if the directory doesn't exist
-            return samples;
+            log_entries.push(format!("Experiment directory does not exist: {}", experiment_dir.display()));
+            return (samples, log_entries);
         }
         
-        // Use a glob pattern to find all json files in subdirectories
-        let pattern = format!("{}/*/*.json", experiment_dir.display());
+        // Add diagnostics to log
+        log_entries.push(format!("Scanning experiment directory: {}", experiment_dir.display()));
+        log_entries.push(String::from("----------------------------------------"));
+        let mut found_subdirs = false;
         
-        if let Ok(entries) = glob::glob(&pattern) {
+        // List all subdirectories in the experiment directory
+        if let Ok(entries) = std::fs::read_dir(experiment_dir) {
             for entry in entries.filter_map(Result::ok) {
-                // Check if the file name is pipeline-summary.json
-                if entry.file_name().unwrap_or_default() == "pipeline-summary.json" {
-                    // Get the parent directory which represents a sample
-                    if let Some(sample_dir) = entry.parent() {
-                        samples.push(sample_dir.to_path_buf());
+                let path = entry.path();
+                if path.is_dir() {
+                    found_subdirs = true;
+                    // Get only the directory name for cleaner output
+                    let dir_name = path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("Unknown");
+                    
+                    // Check if this directory has a pipeline_summary.json file
+                    let json_path = path.join("pipeline_summary.json");
+                    if json_path.exists() {
+                        log_entries.push(format!("✓ {}: Has pipeline_summary.json", dir_name));
+                        samples.push(path);
+                    } else {
+                        log_entries.push(format!("✗ {}: No pipeline_summary.json", dir_name));
                     }
                 }
             }
         }
         
+        if !found_subdirs {
+            log_entries.push(String::from("No subdirectories found in experiment directory"));
+        }
+        
         // If no samples found, add a mock sample for testing
         if samples.is_empty() && cfg!(debug_assertions) {
+            log_entries.push(String::from("No samples found with pipeline_summary.json files"));
+            log_entries.push(String::from("Adding mock samples for testing"));
             // For development/testing purposes - create a mock sample
             samples.push(PathBuf::from("/mock/sample1"));
             samples.push(PathBuf::from("/mock/sample2"));
@@ -278,7 +314,10 @@ impl App {
         // Sort samples by name for consistent display
         samples.sort();
         
-        samples
+        log_entries.push(format!("Found {} sample(s) with pipeline_summary.json files", samples.len()));
+        log_entries.push(String::from("----------------------------------------"));
+        
+        (samples, log_entries)
     }
     
     // Select the current sample and switch to the main menu mode
@@ -351,12 +390,20 @@ impl App {
             if path.exists() {
                 // Directory exists, continue to sample selection
                 self.experiment_dir = Some(path.clone());
-                self.samples = Self::scan_for_samples(&path);
+                let (new_samples, log_entries) = Self::scan_for_samples(&path);
+                self.samples = new_samples;
+                
                 if !self.samples.is_empty() {
                     self.sample_selection_state.select(Some(0));
+                    self.mode = AppMode::SampleSelection;
+                    self.popup = PopupState::Hidden;
+                } else {
+                    // No samples found, show diagnostics
+                    self.mode = AppMode::SampleSelection;
+                    self.popup = PopupState::DiagnosticsLog {
+                        log_entries,
+                    };
                 }
-                self.mode = AppMode::SampleSelection;
-                self.popup = PopupState::Hidden;
             } else {
                 // Directory doesn't exist, ask if we should create it
                 self.popup = PopupState::DirectoryConfirmation {
@@ -386,12 +433,20 @@ impl App {
                 
                 // Directory created, continue to sample selection
                 self.experiment_dir = Some(dir_path.clone());
-                self.samples = Self::scan_for_samples(&dir_path);
+                let (new_samples, log_entries) = Self::scan_for_samples(&dir_path);
+                self.samples = new_samples;
+                
                 if !self.samples.is_empty() {
                     self.sample_selection_state.select(Some(0));
+                    self.mode = AppMode::SampleSelection;
+                    self.popup = PopupState::Hidden;
+                } else {
+                    // No samples found, show diagnostics
+                    self.mode = AppMode::SampleSelection;
+                    self.popup = PopupState::DiagnosticsLog {
+                        log_entries,
+                    };
                 }
-                self.mode = AppMode::SampleSelection;
-                self.popup = PopupState::Hidden;
             } else {
                 // User declined to create directory, return to input
                 self.popup = PopupState::DirectoryInput {
@@ -455,6 +510,20 @@ impl App {
                     PopupState::DirectoryConfirmation { .. } => {
                         self.handle_directory_confirmation(false); // Cancel directory creation
                     }
+                    PopupState::DiagnosticsLog { .. } => {
+                        // Close the diagnostics log and return to directory input
+                        self.popup = PopupState::DirectoryInput {
+                            input: self.experiment_dir
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_default(),
+                            cursor_position: self.experiment_dir
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().len())
+                                .unwrap_or(0),
+                            message: "Enter the experiment directory path:".to_string(),
+                        };
+                    }
                     _ => {
                         // Pressing Escape in the directory input prompt will quit the app
                         self.should_quit = true;
@@ -462,7 +531,10 @@ impl App {
                 }
             }
             AppMode::SampleSelection => {
-                if self.experiment_dir.is_none() {
+                // If we're in the diagnostics log popup, close it first
+                if let PopupState::DiagnosticsLog { .. } = &self.popup {
+                    self.popup = PopupState::Hidden;
+                } else if self.experiment_dir.is_none() {
                     // If we're at the sample selection screen without an experiment dir,
                     // go back to directory prompt
                     self.mode = AppMode::DirectoryPrompt;
@@ -588,56 +660,8 @@ struct Args {
     no_tui: bool,
 }
 
-/// Prompt the user to input an experiment directory path
-fn prompt_for_experiment_dir() -> String {
-    println!("No experiment directory provided.");
-    println!("Please enter the path to the experiment directory:");
-    print!("> ");
-    stdout().flush().unwrap(); // Ensure the prompt is displayed
-    
-    let mut input = String::new();
-    stdin().read_line(&mut input).expect("Failed to read line");
-    
-    // Trim whitespace and return
-    input.trim().to_string()
-}
-
-/// Validate the experiment directory path and return a PathBuf
-fn get_valid_experiment_dir(dir_option: Option<String>) -> PathBuf {
-    // If directory was provided via args, use it
-    let dir_string = match dir_option {
-        Some(path) => path,
-        None => prompt_for_experiment_dir(),
-    };
-    
-    // Expand the path (handle ~ in paths)
-    let expanded_path = shellexpand::tilde(&dir_string);
-    let path = PathBuf::from(expanded_path.as_ref());
-    
-    // Check if the directory exists
-    if !path.exists() {
-        // If it doesn't exist, ask if we should create it
-        println!("Directory '{}' does not exist.", path.display());
-        println!("Would you like to create it? (y/n)");
-        print!("> ");
-        stdout().flush().unwrap();
-        
-        let mut input = String::new();
-        stdin().read_line(&mut input).expect("Failed to read line");
-        
-        if input.trim().to_lowercase() == "y" {
-            // Create the directory
-            std::fs::create_dir_all(&path).expect("Failed to create directory");
-            println!("Created directory: {}", path.display());
-        } else {
-            // If user doesn't want to create it, use the current directory
-            println!("Using current directory instead.");
-            return PathBuf::from(".");
-        }
-    }
-    
-    path
-}
+// These functions were removed as they were unused and their functionality
+// has been integrated directly into the run_cli_mode function and App::new
 
 fn main() {
     // Parse command-line arguments
@@ -647,14 +671,19 @@ fn main() {
     let experiment_dir_option = args.experiment_dir.as_ref().map(|path_str| {
         let expanded_path = shellexpand::tilde(path_str);
         PathBuf::from(expanded_path.as_ref())
-    }).unwrap_or_else(|| PathBuf::from("."));
+    });
+    
+    // Convert to PathBuf for CLI mode
+    let cli_dir_path = experiment_dir_option.clone()
+        .map(|p| p)
+        .unwrap_or_else(|| PathBuf::from("."));
     
     // Check if the TUI mode should be avoided (useful when running in environments that don't support TUI)
     if args.no_tui {
-        run_cli_mode(experiment_dir_option);
+        run_cli_mode(cli_dir_path);
     } else {
         // Try running in TUI mode, fallback to CLI mode if it fails
-        if let Err(err) = run_app(args.experiment_dir) {
+        if let Err(err) = run_app(experiment_dir_option) {
             // Clean up terminal even if there's an error
             let _ = disable_raw_mode();
             let _ = execute!(stdout(), LeaveAlternateScreen);
@@ -665,7 +694,7 @@ fn main() {
             // Check if it's a terminal compatibility issue
             if err.to_string().contains("Device not configured") {
                 eprintln!("\nThis application requires a compatible terminal. Falling back to command-line mode...\n");
-                run_cli_mode(experiment_dir_option);
+                run_cli_mode(cli_dir_path);
             } else {
                 std::process::exit(1);
             }
@@ -721,7 +750,13 @@ fn run_cli_mode(experiment_dir_option: PathBuf) {
     println!("Experiment directory: {}", experiment_dir.display());
     
     // Scan for samples
-    let samples = App::scan_for_samples(&experiment_dir);
+    let (samples, log_entries) = App::scan_for_samples(&experiment_dir);
+    
+    // Print diagnostic logs
+    println!("\nDiagnostic logs:");
+    for entry in log_entries {
+        println!("{}", entry);
+    }
     
     if samples.is_empty() {
         println!("No samples found in the experiment directory.");
@@ -741,12 +776,7 @@ fn run_cli_mode(experiment_dir_option: PathBuf) {
     println!("This command-line version is provided as a fallback for environments that don't support TUI applications.");
 }
 
-fn run_app(dir_option: Option<String>) -> Result<(), Box<dyn Error>> {
-    // Convert the string path to PathBuf if provided
-    let experiment_dir_option = dir_option.map(|path_str| {
-        let expanded_path = shellexpand::tilde(&path_str);
-        PathBuf::from(expanded_path.as_ref())
-    });
+fn run_app(experiment_dir_option: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     
     // Print starting message
     println!("Starting pipeline interface...");
@@ -877,10 +907,20 @@ fn ui(frame: &mut Frame, app: &mut App) {
         AppMode::SampleSelection => {
             // Render the sample selection interface
             render_sample_selection(frame, app, &chunks);
+            
+            // If there's a diagnostics popup, render it on top
+            if let PopupState::DiagnosticsLog { .. } = &app.popup {
+                render_directory_prompt(frame, app);
+            }
         }
         AppMode::MainMenu => {
             // Render the main menu interface
             render_main_menu(frame, app, &chunks);
+            
+            // If there's a diagnostics popup, render it on top
+            if let PopupState::DiagnosticsLog { .. } = &app.popup {
+                render_directory_prompt(frame, app);
+            }
         }
     }
 }
@@ -888,16 +928,16 @@ fn ui(frame: &mut Frame, app: &mut App) {
 fn render_directory_prompt(frame: &mut Frame, app: &App) {
     let area = frame.size();
     
-    // Calculate popup dimensions and position
-    let popup_width = area.width.min(60);
-    let popup_height = 6;
-    let popup_x = (area.width - popup_width) / 2;
-    let popup_y = (area.height - popup_height) / 2;
-    
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
-    
     match &app.popup {
         PopupState::DirectoryInput { input, cursor_position, message } => {
+            // Calculate popup dimensions and position
+            let popup_width = area.width.min(60);
+            let popup_height = 6;
+            let popup_x = (area.width - popup_width) / 2;
+            let popup_y = (area.height - popup_height) / 2;
+            
+            let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+            
             // Render the input popup
             let popup_block = Block::default()
                 .title("Directory Input")
@@ -947,6 +987,14 @@ fn render_directory_prompt(frame: &mut Frame, app: &App) {
             frame.render_widget(instructions_paragraph, popup_chunks[2]);
         }
         PopupState::DirectoryConfirmation { directory, message } => {
+            // Calculate popup dimensions and position
+            let popup_width = area.width.min(60);
+            let popup_height = 6;
+            let popup_x = (area.width - popup_width) / 2;
+            let popup_y = (area.height - popup_height) / 2;
+            
+            let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+            
             // Render the confirmation popup
             let popup_block = Block::default()
                 .title("Confirmation")
@@ -987,6 +1035,61 @@ fn render_directory_prompt(frame: &mut Frame, app: &App) {
                 .alignment(Alignment::Center);
             frame.render_widget(instructions_paragraph, popup_chunks[2]);
         }
+        PopupState::DiagnosticsLog { log_entries } => {
+            // Add overlay to dim the background
+            frame.render_widget(
+                Block::default().style(Style::default().bg(Color::Black).fg(Color::Black)),
+                area
+            );
+            
+            // Calculate popup dimensions and position - make it larger for logs
+            let popup_width = area.width.min(80).max(60);
+            let popup_height = area.height.min(20).max(10);
+            let popup_x = (area.width - popup_width) / 2;
+            let popup_y = (area.height - popup_height) / 2;
+            
+            let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+            
+            // Render the diagnostics popup
+            let popup_block = Block::default()
+                .title("Diagnostics Log")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+            
+            // Create layout for the popup content
+            frame.render_widget(popup_block.clone(), popup_area);
+            let popup_inner_area = popup_block.inner(popup_area);
+            
+            // Convert log entries to a single text with newlines
+            let log_text = if log_entries.is_empty() {
+                "No diagnostic information available".to_string()
+            } else {
+                log_entries.join("\n")
+            };
+            
+            // Render the log content with scrolling
+            let log_paragraph = Paragraph::new(log_text)
+                .style(Style::default().fg(Color::White))
+                .alignment(Alignment::Left)
+                .scroll((0, 0))  // Starting scroll position
+                .wrap(ratatui::widgets::Wrap { trim: true });
+                
+            frame.render_widget(log_paragraph, popup_inner_area);
+            
+            // Render instructions at the bottom
+            let instructions = "Press Esc to close diagnostics";
+            let instructions_area = Rect::new(
+                popup_x, 
+                popup_y + popup_height - 1,
+                popup_width,
+                1
+            );
+            
+            let instructions_paragraph = Paragraph::new(instructions)
+                .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray))
+                .alignment(Alignment::Center);
+            frame.render_widget(instructions_paragraph, instructions_area);
+        }
         _ => {}
     }
 }
@@ -1003,7 +1106,15 @@ fn render_sample_selection(frame: &mut Frame, app: &mut App, chunks: &[Rect]) {
 
     // Create the sample items
     let items: Vec<ListItem> = if app.samples.is_empty() {
-        vec![ListItem::new("No samples found. Please check the experiment directory.")]
+        vec![
+            ListItem::new("No samples found. Please check the experiment directory."),
+            ListItem::new(""),
+            ListItem::new("A valid sample must:"),
+            ListItem::new("  1. Be a subdirectory of the experiment directory"),
+            ListItem::new("  2. Contain a file named 'pipeline_summary.json'"),
+            ListItem::new(""),
+            ListItem::new("Press 'Esc' to go back and select a different directory.")
+        ]
     } else {
         app.samples
             .iter()
