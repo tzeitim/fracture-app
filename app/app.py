@@ -54,7 +54,7 @@ app_ui = ui.page_fluid(
     ui.layout_sidebar(
         # Sidebar panel
         ui.sidebar(
-            create_data_input_sidebar(db),
+            create_data_input_sidebar(db=db),
             width=350,
         ),
 
@@ -129,6 +129,34 @@ app_ui = ui.page_fluid(
                     ),
                 ),
             ),
+            ui.nav_panel("DOT Viewer",
+                ui.row(
+                    ui.column(3,
+                        ui.panel_well(
+                            ui.h4("Upload DOT File"),
+                            ui.input_file("dot_file", "Select DOT File", accept=[".dot"]),
+                            ui.hr(),
+                            ui.h4("Graph Display Options"),
+                            ui.input_switch("dot_weighted", "Use Weighted Layout", value=False),
+                            ui.input_select(
+                                "dot_weight_method",
+                                "Weight Method",
+                                choices={
+                                    "nlog": "Negative Log Coverage",
+                                    "inverse": "Inverse Coverage"
+                                },
+                                selected="inverse"
+                            ),
+                            ui.input_switch("dot_separate_components", "Separate Components", value=False),
+                        )
+                    ),
+                    ui.column(9,
+                        ui.panel_well(
+                            ui.div(output_widget("dot_graph"), style="min-height: 800px; height: auto; width: 100%")
+                        )
+                    ),
+                ),
+            ),
             ui.nav_panel("Settings",
                 ui.row(
                     ui.column(6,
@@ -183,6 +211,17 @@ def server(input, output, session):
             # Default slate theme
             session.send_custom_message("shinyswatch-theme", "slate")
             current_template.set(DARK_TEMPLATE)
+    
+    # Update the dataset dropdown when system changes
+    @reactive.Effect
+    @reactive.event(input.system_prefix)
+    def update_dataset_choices():
+        if input.input_type() == "remote":
+            ui.update_selectize(
+                "remote_path",
+                choices=db,
+                selected=None
+            )
     
     @reactive.Effect
     @reactive.event(input.assembly_method)
@@ -319,7 +358,7 @@ def server(input, output, session):
             """)
 
     @reactive.Effect
-    @reactive.event(input.parquet_file_local, input.parquet_file, input.remote_path, input.input_type, input.system_prefix, input.sample_n_umis, input.sample_min_reads, input.sample_umis)
+    @reactive.event(input.parquet_file_local, input.parquet_file, input.remote_path, input.input_type, input.system_prefix, input.sample_n_umis, input.sample_min_reads, input.sample_umis, input.provided_umi)
     def load_dataset():
         with reactive.isolate():
             data.set(None)
@@ -344,7 +383,8 @@ def server(input, output, session):
                 remote_path=input.remote_path() if input_type == "remote" else None,
                 sample_umis=input.sample_umis(),
                 sample_n_umis=input.sample_n_umis(),
-                sample_min_reads=input.sample_min_reads()
+                sample_min_reads=input.sample_min_reads(),
+                provided_umi=input.provided_umi()
             )
             
             if df is None:
@@ -908,5 +948,80 @@ def server(input, output, session):
                 )
 
         return fig
+
+    @output
+    @render_plotly
+    @reactive.event(input.dot_file, input.app_theme, input.dot_weighted, input.dot_weight_method, input.dot_separate_components)
+    def dot_graph():
+        if input.dot_file() is None:
+            empty_fig = go.Figure(layout=current_template()['layout'])
+            empty_fig.update_layout(
+                height=800,
+                autosize=True,
+                annotations=[dict(
+                    text="Upload a .dot file to view the graph",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(color='#ffffff', size=16)
+                )]
+            )
+            return empty_fig
+
+        try:
+            file_info = input.dot_file()
+            dot_file_path = file_info[0]["datapath"]
+            
+            # Create graph visualization using existing function
+            dark_mode = input.app_theme() != "latte"  # Only latte is light mode
+            fig = create_graph_plot(
+                dot_file_path,
+                dark_mode=dark_mode,
+                line_shape='linear',
+                graph_type='custom',  # Custom type for uploaded files
+                path_nodes=None,
+                weighted=input.dot_weighted(),
+                weight_method=input.dot_weight_method(),
+                separate_components=input.dot_separate_components(),
+                component_padding=3.0,
+                min_component_size=3,
+                spring_args={
+                    'k': 0.001,
+                    'iterations': 500,
+                    'scale': 2.0,
+                },
+                debug=True
+            )
+            
+            if not isinstance(fig, go.Figure):
+                raise ValueError(f"Expected Figure, got {type(fig)}")
+                
+            fig.update_layout(
+                height=800,
+                autosize=True,
+                margin=dict(b=60),
+            )
+            
+            return fig
+            
+        except Exception as e:
+            print(f"Error visualizing DOT file: {str(e)}")
+            error_fig = go.Figure(layout=current_template()['layout'])
+            error_fig.update_layout(
+                height=800,
+                autosize=True,
+                annotations=[dict(
+                    text=f"Error loading DOT file: {str(e)}",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(color='#ffffff', size=14)
+                )]
+            )
+            return error_fig
 
 app = App(app_ui, server)

@@ -2,10 +2,13 @@
 from shiny import ui
 from .config import SYSTEM_PREFIXES
 
-def create_data_input_sidebar(system_prefixes=None):
+def create_data_input_sidebar(db=None, system_prefixes=None):
     """Create the data input sidebar panel"""
     if system_prefixes is None:
         system_prefixes = SYSTEM_PREFIXES
+    
+    if db is None:
+        db = {}
         
     return ui.panel_well(
         ui.h1("Hall of Fame"),
@@ -25,6 +28,7 @@ def create_data_input_sidebar(system_prefixes=None):
             value=True
             ),
         ui.input_numeric("sample_min_reads", "Minimum number of reads per umi", value=100),
+        ui.input_text("provided_umi", "Provided UMI (optional)", value="", placeholder="Enter specific UMI to load"),
         #---
         ui.hr(),
         ui.h3("Data Input"),
@@ -50,7 +54,7 @@ def create_data_input_sidebar(system_prefixes=None):
             ui.input_selectize(
                 "remote_path", 
                 "Select Dataset",
-                choices=[],
+                choices=db,
                 ),
             ),
 

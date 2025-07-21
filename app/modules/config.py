@@ -7,7 +7,7 @@ SAMPLE_PERIOD = 1
 
 SYSTEM_PREFIXES = {
         "wexac": "/home/pedro/wexac/",
-        "labs": "/home/labs/nyosef/pedro/",
+        "labs": "/home/projects/nyosef/pedro/",
         "laptop": "/Volumes/pedro",
         }
 

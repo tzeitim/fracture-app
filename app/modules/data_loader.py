@@ -15,10 +15,11 @@ def load_database(database_path):
         .sort('name')
     )
     
+    # Create a dictionary where keys are the dataset names and values are the file paths
     return {i:ii for i,ii in db.iter_rows()}
 
 def load_data(input_type, file_info, system_prefix=None, remote_path=None, 
-              sample_umis=False, sample_n_umis=100, sample_min_reads=100):
+              sample_umis=False, sample_n_umis=100, sample_min_reads=100, provided_umi=None):
     """Load data based on input type and parameters"""
     try:
         if input_type == "upload" and file_info is not None:
@@ -34,14 +35,23 @@ def load_data(input_type, file_info, system_prefix=None, remote_path=None,
         if not Path(file_path).exists():
             return None, f"File not found: {file_path}"
 
-        if sample_umis:
+        # Handle provided UMI - takes priority over sampling
+        if provided_umi and provided_umi.strip():
+            df = (
+                pl.scan_parquet(file_path)
+                .filter(pl.col('umi') == provided_umi.strip())
+                .collect(engine="streaming")
+            )
+            if df.shape[0] == 0:
+                return None, f"Provided UMI '{provided_umi.strip()}' not found in dataset"
+        elif sample_umis:
             df = (
                 pl.scan_parquet(file_path)
                 .filter(pl.col('reads') >= sample_min_reads)
                 .filter(
                     pl.col('umi').is_in(pl.col('umi').sample(sample_n_umis))
                 )    
-                .collect(streaming=True)
+                .collect(engine="streaming")
             )
 
             if df.shape[0] == 0:

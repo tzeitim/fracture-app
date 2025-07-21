@@ -33,8 +33,12 @@ if __name__ == "__main__":
     try:
         from shiny import run_app
         
-        # Get the environment port if available, otherwise use 8000
-        port = int(os.environ.get("PORT", 8000))
+        # Get port from command line argument, environment variable, or default to 8000
+        port = 8000
+        if len(sys.argv) > 1:
+            port = int(sys.argv[1])
+        else:
+            port = int(os.environ.get("PORT", 8000))
         
         logger.info(f"Launching app on port {port}")
         run_app('app.py', host="0.0.0.0", port=port)
