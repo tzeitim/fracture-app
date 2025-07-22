@@ -1,0 +1,85 @@
+# Node Selection and Highlighting Plan
+
+## Overview
+Implement node selection and highlighting functionality for the assembly graph visualization to allow users to focus on specific nodes of interest.
+
+## Phase 1: Text-Based Selection (IMPLEMENTED)
+
+### 1. UI Control Addition
+- **Location**: Graph controls panel in UI
+- **Control**: Text input field
+- **Label**: "Highlight Nodes (comma-separated IDs)"
+- **Purpose**: Allow users to specify node IDs to highlight
+- **Format**: "node1, node2, node3" (comma-separated)
+
+### 2. Node Styling Extension
+- **File**: `modules/visualization.py`
+- **Function**: `get_node_style()`
+- **Enhancement**: Add `selected_nodes` parameter
+- **Priority**: Highest priority styling (overrides anchor/path highlighting)
+- **Visual Style**: 
+  - Thick red border (width: 3-4px)
+  - Increased node size
+  - High contrast color
+
+### 3. Assembly Graph Integration
+- **File**: `app.py`
+- **Function**: `assembly_graph()`
+- **Changes**:
+  - Parse text input for node IDs
+  - Pass selected nodes to visualization function
+  - Add reactive dependency on selection input
+
+### 4. Selection Logic
+- Parse comma-separated input
+- Handle whitespace and validation
+- Case-insensitive matching
+- Error handling for invalid nodes
+
+## Phase 2: Mouse-Based Selection (FUTURE)
+
+### 1. Click Handling
+- Use Plotly's `clickData` event
+- Shiny reactive integration
+- Toggle selection on click
+
+### 2. Selection State Management
+- Reactive variable for selected nodes
+- Persistence across graph updates
+- Selection count display
+
+### 3. Multi-Selection
+- Ctrl+Click for multiple selection
+- Clear selection button
+- Select/deselect all functionality
+
+### 4. Advanced Features
+- Selection export/import
+- Save selection patterns
+- Selection-based filtering
+
+## Implementation Notes
+
+### Current Architecture
+- Graph uses Plotly with Shiny reactive system
+- Node styling already supports priority-based highlighting
+- Existing infrastructure for path and anchor highlighting
+
+### Technical Considerations
+- Node IDs may vary based on assembly method
+- Consider sequence-based selection as alternative
+- Handle large node lists efficiently
+- Maintain selection across parameter changes
+
+### Testing Strategy
+- Test with various node ID formats
+- Verify highlighting persistence
+- Test with different graph types (compressed/preliminary)
+- Validate with real assembly data
+
+## Future Enhancements
+- Subgraph extraction based on selection
+- Export selected node data
+- Selection-based analysis tools
+- Integration with coverage plot
+- Node annotation system

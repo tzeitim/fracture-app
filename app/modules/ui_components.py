@@ -168,6 +168,12 @@ def create_graph_controls():
                 "Separate Disjoint Graphs",
                 value=False
                 ),
+            ui.input_text(
+                "selected_nodes",
+                "Highlight Nodes (comma-separated IDs)",
+                value="",
+                placeholder="e.g., node1, node2, node3"
+                ),
             ui.input_numeric(
                 "component_padding",
                 "Component Spacing",

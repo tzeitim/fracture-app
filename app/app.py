@@ -929,7 +929,7 @@ def server(input, output, session):
     @reactive.event(input.use_weighted, input.draw_graph, input.assemble, input.app_theme, 
                    input.separate_components, input.component_padding, input.min_component_size,
                    input.layout_k, input.layout_iterations, input.layout_scale,
-                   input.weight_method, input.graph_type)
+                   input.weight_method, input.graph_type, input.selected_nodes)
     def assembly_graph():
         if assembly_result() is None:
             empty_fig = go.Figure(layout=current_template()['layout'])
@@ -977,6 +977,13 @@ def server(input, output, session):
         if path_results() is not None and isinstance(path_results(), dict):
             path_nodes = path_results().get('path_nodes')
 
+        # Parse selected nodes from text input
+        selected_nodes = None
+        if input.selected_nodes() and input.selected_nodes().strip():
+            # Parse comma-separated node IDs, clean whitespace, and filter empty strings
+            selected_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+            logger.debug(f"Parsed selected nodes: {selected_nodes}")
+
         # Create graph visualization
         dark_mode = input.app_theme() != "latte"  # Only latte is light mode
         try:
@@ -996,6 +1003,7 @@ def server(input, output, session):
                         'iterations':input.layout_iterations(),
                         'scale':input.layout_scale(),
                         },
+                    selected_nodes=selected_nodes,
                     debug=True
                     )
             
@@ -1116,6 +1124,7 @@ def server(input, output, session):
                     'iterations': 500,
                     'scale': 2.0,
                 },
+                selected_nodes=None,  # No node selection for DOT viewer
                 debug=True
             )
             

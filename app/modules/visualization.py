@@ -75,7 +75,7 @@ def create_weighted_graph(graph, weight_method):
 
     return G
 
-def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=None):
+def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=None, selected_nodes=None):
     """
     Determine node style including color and line properties based on node properties.
     
@@ -85,10 +85,18 @@ def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=Non
         dark_mode: Boolean indicating if dark mode is enabled
         node_id: The ID of the node (used for path checking)
         path_nodes: Set/list of node IDs that are part of the path
+        selected_nodes: Set/list of node IDs that should be highlighted
     
     Returns:
         dict: Style properties for the node
     """
+    # HIGHEST PRIORITY: Check if node is in selected nodes list
+    if selected_nodes is not None and node_id is not None and node_id in selected_nodes:
+        return dict(
+            color='rgba(255, 0, 0, 0.8)',  # Bright red with transparency
+            line=dict(color='#ff0000', width=4)  # Thick red border
+        )
+    
     # Default style for empty/invalid sequences
     if not seq:
         return dict(
@@ -352,7 +360,8 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
 
 def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', 
                       debug=False, path_nodes=None, weighted=False, weight_method='nlog', 
-                      separate_components=False, component_padding=3.0, min_component_size=3, spring_args=None):
+                      separate_components=False, component_padding=3.0, min_component_size=3, spring_args=None,
+                      selected_nodes=None):
     """Create an interactive plot of the assembly graph.
     
     Args:
@@ -365,6 +374,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         separate_components (bool): Whether to position disjoint graphs separately
         component_padding (float): Amount of padding between separate components
         min_component_size (int): Minimum size of a component to be included in the plot
+        selected_nodes (list/set): Node IDs that should be highlighted with selection styling
     """
     if spring_args is None:
         spring_args = {'k': 1.5, 'iterations': 50, 'scale': 2.0} 
@@ -543,7 +553,8 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 
                 # Get node style
                 node_style = get_node_style(seq_part, sequence_colors, dark_mode, 
-                                          node_id=seq_part, path_nodes=path_nodes)
+                                          node_id=seq_part, path_nodes=path_nodes, 
+                                          selected_nodes=selected_nodes)
                 node_colors.append(node_style['color'])
                 
                 # Calculate node size
