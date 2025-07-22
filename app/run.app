@@ -9,15 +9,12 @@ import os
 from pathlib import Path
 import logging
 
-# Setup logging
+# Configure logging to match uvicorn's style for startup messages
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    format="%(levelname)s:     %(message)s"
 )
-logger = logging.getLogger("fracture-app")
+logger = logging.getLogger()
 
 if __name__ == "__main__":
     # Add script directory to path to ensure imports work
@@ -41,6 +38,26 @@ if __name__ == "__main__":
             port = int(os.environ.get("PORT", 8000))
         
         logger.info(f"Launching app on port {port}")
+        
+        # Set the port in environment so app.py can access it
+        os.environ["FRACTURE_APP_PORT"] = str(port)
+        
+        # Log server URLs with correct port - show immediately at startup
+        import socket
+        try:
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+            logger.info("🚀 FRACTURE Explorer is starting up!")
+            logger.info(f"📍 Hostname: {hostname}")
+            logger.info(f"🌐 Local IP URL: http://{local_ip}:{port}")
+            logger.info(f"🌍 Hostname URL: http://{hostname}:{port}")
+            logger.info(f"🏠 Localhost URL: http://localhost:{port}")
+            logger.info(f"🔗 Access from same network: http://{local_ip}:{port}")
+        except Exception as e:
+            logger.info("🚀 FRACTURE Explorer is starting up!")
+            logger.info(f"🌐 Default URL: http://localhost:{port}")
+            logger.warning(f"⚠️  Could not determine hostname/IP: {e}")
+        
         run_app('app.py', host="0.0.0.0", port=port)
     except Exception as e:
         logger.error(f"Error launching app: {e}")

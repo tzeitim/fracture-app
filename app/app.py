@@ -8,9 +8,13 @@ import plotly.graph_objects as go
 import plotly.express as px
 import matplotlib
 import pandas as pd
+import logging
 
 # Initialize matplotlib
 matplotlib.use("agg")
+
+# Use logger that inherits uvicorn's formatting
+logger = logging.getLogger("fracture_app")
 
 # Import modules
 from modules.config import SYSTEM_PREFIXES, DARK_TEMPLATE, LATTE_TEMPLATE, MOCHA_TEMPLATE
@@ -32,8 +36,9 @@ pl.Config().set_fmt_str_lengths(666)
 # Load database from file
 try:
     db = load_database('../parquet_db.txt')
+    logger.info(f"Successfully loaded database with {len(db)} entries")
 except Exception as e:
-    print(f"Error loading database: {e}")
+    logger.error(f"Error loading database: {e}")
     db = {}
 
 # Define the UI
@@ -100,7 +105,7 @@ app_ui = ui.page_fluid(
                     ),
                     ui.column(6,
                         ui.h4("Coverage Plot (from uniqued reads!!)"),
-                        ui.div(output_widget("coverage_plot"), style="height: 500px;"),
+                        ui.output_ui("coverage_plot_container")
                     ),
                 ),
                 ui.row(
@@ -179,8 +184,8 @@ def server(input, output, session):
     # Clean up any temporary files
     os.system("rm -f *__*.dot *__*.csv")
     
-    # Debug print
-    print("Starting server with tabs - Assembly Results tab should be selected by default")
+    # Debug log for session start
+    logger.debug("New user session started - Assembly Results tab will be selected by default")
     
     # Explicitly select the Assembly Results tab on startup
     ui.update_navs("main_tabs", selected="Assembly Results")
@@ -369,13 +374,20 @@ def server(input, output, session):
         try:
             # Determine input type and get file_info
             input_type = input.input_type()
+            logger.debug(f"Loading dataset with input_type: {input_type}")
+            
             file_info = None
             if input_type == "upload":
                 file_info = input.parquet_file()
+                logger.debug(f"Upload file info: {file_info}")
             elif input_type == "local":
                 file_info = input.parquet_file_local()
+                logger.debug(f"Local file path: {file_info}")
+            elif input_type == "remote":
+                logger.debug(f"Remote path - system: {input.system_prefix()}, path: {input.remote_path()}")
             
             # Load data based on input type
+            logger.debug("Calling load_data function...")
             df, file_path_or_error = load_data(
                 input_type, 
                 file_info,
@@ -388,16 +400,21 @@ def server(input, output, session):
             )
             
             if df is None:
+                logger.error(f"load_data returned None with error: {file_path_or_error}")
                 ui.notification_show(file_path_or_error, type='error')
                 return
                 
             # Successfully loaded data
+            logger.info(f"Successfully loaded data with shape: {df.shape}")
+            logger.debug(f"Data columns: {df.columns}")
+            
             dataset.set(file_path_or_error)
             data.set(df)
             ui.notification_show(f"Successfully loaded data from {file_path_or_error}")
             
             # Update UMI choices
             umis = get_umis(df)
+            logger.debug(f"Found {len(umis)} UMIs")
             ui.update_selectize(
                 "umi",
                 choices=umis,
@@ -405,11 +422,16 @@ def server(input, output, session):
             )
 
         except Exception as e:
+            import traceback
+            error_msg = f"Error loading data: {str(e)}"
+            logger.error(error_msg)
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            
             with reactive.isolate():
                 data.set(None)
                 sweep_results.set(None)
                 assembly_result.set(None)
-            ui.notification_show(f"Error loading data: {str(e)}", type="error")
+            ui.notification_show(error_msg, type="error")
 
     @output
     @render.text
@@ -472,6 +494,9 @@ def server(input, output, session):
                 ui.notification_show("Please load data and select a UMI first", type="warning")
                 return
 
+            logger.info(f"Starting assembly for UMI: {input.umi()}")
+            logger.debug(f"Assembly parameters - method: {input.assembly_method()}, k: {input.kmer_size()}, min_coverage: {input.min_coverage()}")
+
             # Run assembly
             result = assemble_umi(
                 data(),
@@ -487,6 +512,8 @@ def server(input, output, session):
                 end_anchor=input.end_anchor(),
             )
             
+            logger.info(f"Assembly completed, result shape: {result.shape if result is not None else 'None'}")
+            
             # Set the appropriate graph type based on assembly method
             if input.assembly_method() == "shortest_path":
                 ui.update_select("graph_type", selected="preliminary")
@@ -494,8 +521,13 @@ def server(input, output, session):
                 ui.update_select("graph_type", selected="compressed")
                 
             handle_assembly_result(result)
+            
         except Exception as e:
-            ui.notification_show(f"Error in regular assembly: {str(e)}", type="error")
+            import traceback
+            error_msg = f"Error in regular assembly: {str(e)}"
+            logger.error(error_msg)
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            ui.notification_show(error_msg, type="error")
 
     def handle_assembly_result(result):
         """Common function to handle assembly results"""
@@ -510,7 +542,7 @@ def server(input, output, session):
                     path_file = f"{base_path}__path.csv"
 
                     if Path(path_file).exists():
-                        print(f'Loading path file {path_file} ... ')
+                        logger.debug(f'Loading path file {path_file}')
                         path_df = (pl.read_csv(path_file)
                                    .with_columns(pl.col('sequence').str.len_chars().alias('length'))
                                    .sort('coverage', 'length', descending=True))
@@ -610,7 +642,7 @@ def server(input, output, session):
             return ui.HTML(format_top_contigs_table(df))
 
         except Exception as e:
-            print(f"Error loading top contigs: {str(e)}")
+            logger.error(f"Error loading top contigs: {str(e)}")
             return "Error loading contig data"
 
     @reactive.Effect
@@ -638,10 +670,9 @@ def server(input, output, session):
                 type="message"
             )
 
-            print(f"Starting sweep with parameters:")
-            print(f"UMI: {input.umi()}")
-            print(f"K-mer range: {k_start}-{k_end}, step={input.k_step()}")
-            print(f"Coverage range: {cov_start}-{cov_end}")
+            logger.info(f"Starting parameter sweep for UMI: {input.umi()}")
+            logger.debug(f"K-mer range: {k_start}-{k_end}, step={input.k_step()}")
+            logger.debug(f"Coverage range: {cov_start}-{cov_end}")
 
             result = sweep_assembly_params(
                 data(),
@@ -668,7 +699,9 @@ def server(input, output, session):
             )
 
         except Exception as e:
-            print(f"Sweep error details: {str(e)}")
+            logger.error(f"Parameter sweep error: {str(e)}")
+            import traceback
+            logger.debug(f"Sweep traceback: {traceback.format_exc()}")
             ui.notification_show(
                 f"Error during parameter sweep: {str(e)}", 
                 type="error"
@@ -678,9 +711,26 @@ def server(input, output, session):
             sweep_results.set(None)
 
     @output
+    @render.ui
+    @reactive.event(input.enable_coverage_plot)
+    def coverage_plot_container():
+        """Container that shows coverage plot only if enabled"""
+        if not input.enable_coverage_plot():
+            return ui.div(
+                ui.p("Coverage plot is disabled. Enable it in the Assembly Controls to view coverage."),
+                style="height: 500px; display: flex; align-items: center; justify-content: center; font-style: italic; color: #888;"
+            )
+        else:
+            return ui.div(output_widget("coverage_plot"), style="height: 500px;")
+
+    @output
     @render_plotly
-    @reactive.event(input.umi, data, assembly_result, input.app_theme)
+    @reactive.event(input.umi, data, assembly_result, input.app_theme, input.enable_coverage_plot, input.reference_sequence)
     def coverage_plot():
+        # Only generate plot if enabled
+        if not input.enable_coverage_plot():
+            return go.Figure()
+            
         if data() is None or not input.umi() or input.umi() not in data()['umi']:
             empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
@@ -699,12 +749,42 @@ def server(input, output, session):
             return empty_fig
 
         try:
-            # Load reference sequence for alignment
-            mods = pl.read_parquet(f"{Path(__file__).parent}/mods.parquet")
-            ref_str = mods.filter(pl.col('mod')=='mod_0')['seq'][0]
+            logger.debug(f"Loading reference sequence for coverage plot (UMI: {input.umi()})")
             
-            # Compute coverage
+            # Use provided reference sequence if available
+            if input.reference_sequence() and input.reference_sequence().strip():
+                ref_str = input.reference_sequence().strip()
+                logger.debug(f"Using provided reference sequence, length: {len(ref_str)}")
+            else:
+                # Load reference sequence from file
+                mods_path = f"{Path(__file__).parent}/mods.parquet"
+                logger.debug(f"Looking for reference file at: {mods_path}")
+                
+                if not Path(mods_path).exists():
+                    raise FileNotFoundError(f"Reference file not found: {mods_path}. Please provide a reference sequence manually.")
+                    
+                mods = pl.read_parquet(mods_path)
+                logger.debug(f"Loaded mods.parquet with {len(mods)} rows")
+                
+                # Check available modifications
+                available_mods = mods['mod'].unique().to_list()
+                logger.debug(f"Available modifications: {available_mods}")
+                
+                ref_rows = mods.filter(pl.col('mod') == 'mod_0')
+                if len(ref_rows) == 0:
+                    raise ValueError(f"No 'mod_0' reference found. Available modifications: {available_mods}. Please provide a reference sequence manually.")
+                    
+                ref_str = ref_rows['seq'][0]
+                logger.debug(f"Using default reference sequence, length: {len(ref_str)}")
+            
+            # Validate reference sequence
+            if not ref_str or len(ref_str) < 10:
+                raise ValueError(f"Invalid reference sequence: too short (length: {len(ref_str)})")
+            
+            # Compute coverage with error handling
+            logger.debug(f"Computing coverage for UMI {input.umi()}")
             result = compute_coverage(data(), input.umi(), ref_str)
+            logger.debug(f"Coverage computation completed, result shape: {result.shape}")
             
             # Create plot
             fig = px.line(
@@ -715,7 +795,7 @@ def server(input, output, session):
                         x="Position in reference",
                         y="Reads",
                         ),
-                    title="Coverage of raw reads",
+                    title=f"Coverage of raw reads (ref length: {len(ref_str)})",
                     height=500,
                     )
 
@@ -730,21 +810,65 @@ def server(input, output, session):
             fig.update_xaxes(showticklabels=True, title_standoff=25)
             fig.update_yaxes(showticklabels=True, title_standoff=25)
 
+            logger.debug("Coverage plot created successfully")
             return fig
-        except Exception as e:
-            print(f"Error creating coverage plot: {e}")
-            empty_fig = go.Figure(layout=DARK_TEMPLATE['layout'])
+            
+        except FileNotFoundError as e:
+            error_msg = f"Reference file error: {str(e)}"
+            logger.error(error_msg)
+            empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
                 height=500,
                 autosize=True,
                 annotations=[dict(
-                    text=f"Error creating coverage plot: {str(e)}",
+                    text=error_msg,
                     xref="paper",
                     yref="paper",
                     x=0.5,
                     y=0.5,
                     showarrow=False,
-                    font=dict(color='#ffffff', size=14)
+                    font=dict(color='#ff6b6b', size=14)
+                )]
+            )
+            return empty_fig
+            
+        except ValueError as e:
+            error_msg = f"Reference data error: {str(e)}"
+            logger.error(error_msg)
+            empty_fig = go.Figure(layout=current_template()['layout'])
+            empty_fig.update_layout(
+                height=500,
+                autosize=True,
+                annotations=[dict(
+                    text=error_msg,
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(color='#ff6b6b', size=14)
+                )]
+            )
+            return empty_fig
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"Coverage plot error: {str(e)}"
+            logger.error(error_msg)
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            
+            empty_fig = go.Figure(layout=current_template()['layout'])
+            empty_fig.update_layout(
+                height=500,
+                autosize=True,
+                annotations=[dict(
+                    text=f"Error: {str(e)[:100]}{'...' if len(str(e)) > 100 else ''}",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(color='#ff6b6b', size=14)
                 )]
             )
             return empty_fig
@@ -829,10 +953,10 @@ def server(input, output, session):
         graph_suffix = input.umi()
         graph_path = f"{base_path}{graph_suffix}__{input.graph_type()}.dot"
 
-        print(f"Looking for graph at: {graph_path}")  
+        logger.debug(f"Looking for assembly graph at: {graph_path}")  
 
         if not Path(graph_path).exists():
-            print(f"Graph file not found: {graph_path}")
+            logger.warning(f"Assembly graph file not found: {graph_path}")
             empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
                     height=1000,
@@ -877,7 +1001,7 @@ def server(input, output, session):
             
             # Ensure we have a valid figure
             if not isinstance(fig, go.Figure):
-                print(f"Error: create_graph_plot returned {type(fig)} instead of a Figure")
+                logger.error(f"create_graph_plot returned {type(fig)} instead of a Figure")
                 fig = go.Figure()
                 fig.update_layout(
                         autosize=True,
@@ -893,7 +1017,7 @@ def server(input, output, session):
                             )]
                         )
         except Exception as e:
-            print(f"Error in create_graph_plot: {str(e)}")
+            logger.error(f"Error in create_graph_plot: {str(e)}")
             fig = go.Figure()
             fig.update_layout(
                     autosize=True,
@@ -1007,7 +1131,7 @@ def server(input, output, session):
             return fig
             
         except Exception as e:
-            print(f"Error visualizing DOT file: {str(e)}")
+            logger.error(f"Error visualizing DOT file: {str(e)}")
             error_fig = go.Figure(layout=current_template()['layout'])
             error_fig.update_layout(
                 height=800,

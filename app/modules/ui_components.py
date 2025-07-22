@@ -109,6 +109,18 @@ def create_assembly_controls():
             "Auto K-mer Size",
             value=False
             ),
+        ui.hr(),
+        ui.input_checkbox(
+            "enable_coverage_plot",
+            "Enable Coverage Plot",
+            value=True
+            ),
+        ui.input_text(
+            "reference_sequence",
+            "Reference Sequence (optional)",
+            value="",
+            placeholder="Leave empty to use default from mods.parquet"
+            ),
     )
 
 def create_graph_controls():
