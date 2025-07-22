@@ -75,7 +75,7 @@ def create_weighted_graph(graph, weight_method):
 
     return G
 
-def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=None, selected_nodes=None):
+def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=None, selected_nodes=None, selected_sequences=None):
     """
     Determine node style including color and line properties based on node properties.
     
@@ -86,12 +86,26 @@ def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=Non
         node_id: The ID of the node (used for path checking)
         path_nodes: Set/list of node IDs that are part of the path
         selected_nodes: Set/list of node IDs that should be highlighted
+        selected_sequences: Set/list of sequences that should be highlighted
     
     Returns:
         dict: Style properties for the node
     """
-    # HIGHEST PRIORITY: Check if node is in selected nodes list
+    # HIGHEST PRIORITY: Check if node is selected by ID or sequence
+    is_selected = False
+    
+    # Check if node is in selected nodes list
     if selected_nodes is not None and node_id is not None and node_id in selected_nodes:
+        is_selected = True
+    
+    # Check if sequence is in selected sequences list
+    if selected_sequences is not None and seq is not None:
+        for selected_seq in selected_sequences:
+            if selected_seq.strip() and selected_seq.strip().upper() in seq.upper():
+                is_selected = True
+                break
+    
+    if is_selected:
         return dict(
             color='rgba(255, 0, 0, 0.8)',  # Bright red with transparency
             line=dict(color='#ff0000', width=4)  # Thick red border
@@ -361,7 +375,7 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
 def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', 
                       debug=False, path_nodes=None, weighted=False, weight_method='nlog', 
                       separate_components=False, component_padding=3.0, min_component_size=3, spring_args=None,
-                      selected_nodes=None):
+                      selected_nodes=None, selected_sequences=None):
     """Create an interactive plot of the assembly graph.
     
     Args:
@@ -375,6 +389,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         component_padding (float): Amount of padding between separate components
         min_component_size (int): Minimum size of a component to be included in the plot
         selected_nodes (list/set): Node IDs that should be highlighted with selection styling
+        selected_sequences (list/set): Sequences that should be highlighted with selection styling
     """
     if spring_args is None:
         spring_args = {'k': 1.5, 'iterations': 50, 'scale': 2.0} 
@@ -553,8 +568,8 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 
                 # Get node style
                 node_style = get_node_style(seq_part, sequence_colors, dark_mode, 
-                                          node_id=seq_part, path_nodes=path_nodes, 
-                                          selected_nodes=selected_nodes)
+                                          node_id=node, path_nodes=path_nodes, 
+                                          selected_nodes=selected_nodes, selected_sequences=selected_sequences)
                 node_colors.append(node_style['color'])
                 
                 # Calculate node size

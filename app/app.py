@@ -237,6 +237,13 @@ def server(input, output, session):
         else:
             ui.update_select("graph_type", selected="compressed")
     
+    @reactive.Effect
+    @reactive.event(input.clear_selection)
+    def clear_node_selection():
+        # Clear both selection text inputs
+        ui.update_text("selected_nodes", value="")
+        ui.update_text("selected_sequences", value="")
+    
     @output
     @render.ui
     def theme_css():
@@ -929,7 +936,7 @@ def server(input, output, session):
     @reactive.event(input.use_weighted, input.draw_graph, input.assemble, input.app_theme, 
                    input.separate_components, input.component_padding, input.min_component_size,
                    input.layout_k, input.layout_iterations, input.layout_scale,
-                   input.weight_method, input.graph_type, input.selected_nodes)
+                   input.weight_method, input.graph_type, input.apply_selection)
     def assembly_graph():
         if assembly_result() is None:
             empty_fig = go.Figure(layout=current_template()['layout'])
@@ -977,12 +984,20 @@ def server(input, output, session):
         if path_results() is not None and isinstance(path_results(), dict):
             path_nodes = path_results().get('path_nodes')
 
-        # Parse selected nodes from text input
+        # Parse selected nodes and sequences from text inputs (only if apply_to_assembly is enabled)
         selected_nodes = None
-        if input.selected_nodes() and input.selected_nodes().strip():
-            # Parse comma-separated node IDs, clean whitespace, and filter empty strings
-            selected_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
-            logger.debug(f"Parsed selected nodes: {selected_nodes}")
+        selected_sequences = None
+        
+        if input.apply_to_assembly():
+            # Parse node IDs
+            if input.selected_nodes() and input.selected_nodes().strip():
+                selected_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+                logger.debug(f"Parsed selected nodes for assembly graph: {selected_nodes}")
+            
+            # Parse sequences
+            if input.selected_sequences() and input.selected_sequences().strip():
+                selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
+                logger.debug(f"Parsed selected sequences for assembly graph: {selected_sequences}")
 
         # Create graph visualization
         dark_mode = input.app_theme() != "latte"  # Only latte is light mode
@@ -1004,6 +1019,7 @@ def server(input, output, session):
                         'scale':input.layout_scale(),
                         },
                     selected_nodes=selected_nodes,
+                    selected_sequences=selected_sequences,
                     debug=True
                     )
             
@@ -1083,7 +1099,7 @@ def server(input, output, session):
 
     @output
     @render_plotly
-    @reactive.event(input.dot_file, input.app_theme, input.dot_weighted, input.dot_weight_method, input.dot_separate_components)
+    @reactive.event(input.dot_file, input.app_theme, input.dot_weighted, input.dot_weight_method, input.dot_separate_components, input.apply_selection)
     def dot_graph():
         if input.dot_file() is None:
             empty_fig = go.Figure(layout=current_template()['layout'])
@@ -1106,6 +1122,21 @@ def server(input, output, session):
             file_info = input.dot_file()
             dot_file_path = file_info[0]["datapath"]
             
+            # Parse selected nodes and sequences from text inputs (only if apply_to_dot is enabled)
+            selected_nodes = None
+            selected_sequences = None
+            
+            if input.apply_to_dot():
+                # Parse node IDs
+                if input.selected_nodes() and input.selected_nodes().strip():
+                    selected_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+                    logger.debug(f"Parsed selected nodes for DOT viewer: {selected_nodes}")
+                
+                # Parse sequences
+                if input.selected_sequences() and input.selected_sequences().strip():
+                    selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
+                    logger.debug(f"Parsed selected sequences for DOT viewer: {selected_sequences}")
+            
             # Create graph visualization using existing function
             dark_mode = input.app_theme() != "latte"  # Only latte is light mode
             fig = create_graph_plot(
@@ -1124,7 +1155,8 @@ def server(input, output, session):
                     'iterations': 500,
                     'scale': 2.0,
                 },
-                selected_nodes=None,  # No node selection for DOT viewer
+                selected_nodes=selected_nodes,
+                selected_sequences=selected_sequences,
                 debug=True
             )
             

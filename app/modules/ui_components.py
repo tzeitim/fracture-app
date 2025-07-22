@@ -10,76 +10,82 @@ def create_data_input_sidebar(db=None, system_prefixes=None):
     if db is None:
         db = {}
         
-    return ui.panel_well(
-        ui.h1("Hall of Fame"),
-        ui.HTML("GGGCCTGCATCGCACTGTGG google<br>"),
-        ui.HTML("TTTTCCCGACGGCTGATCGG messy<br>"),
-        ui.HTML("AACATGGACGGTACATCGGG great example of horror<br>"),
-        ui.HTML("AACCCCAGAGGCTCAAGTGG full<br>"),
-        ui.HTML("GCTCGTATCCCGAAGCTAGG failed but overlaps<br>"),
-        ui.HTML("GATGCCTACCATCACTGTGG failed but overlaps<br>"),
-        ui.HTML("ATTGGCGGCACACTGTCCTG tricky <br>"),
-        #---
-        ui.input_numeric("insert_size", "Lineage reporter reference length (bp)", value=450),
-        ui.input_numeric("sample_n_umis", "Number of UMIs to sample", value=100),
-        ui.input_checkbox(
-            "sample_umis",
-            "sub-sample UMIs?",
-            value=True
-            ),
-        ui.input_numeric("sample_min_reads", "Minimum number of reads per umi", value=100),
-        ui.input_text("provided_umi", "Provided UMI (optional)", value="", placeholder="Enter specific UMI to load"),
-        
-        # Coverage Plot Controls
-        ui.input_checkbox(
-            "enable_coverage_plot",
-            "Enable Coverage Plot",
-            value=True
-            ),
-        ui.input_text(
-            "reference_sequence",
-            "Reference Sequence (optional)",
-            value="",
-            placeholder="Leave empty to use default from mods.parquet"
-            ),
-        #---
-        ui.hr(),
-        ui.h3("Data Input"),
-        ui.input_radio_buttons(
-            "input_type",
-            "Select Input Method",
-            {
-                "upload": "Upload File",
-                "remote": "Remote File Path",
-                "local": "Local File Path"
-                },
-            selected="local"
-            ),
-        ui.panel_conditional(
-            "input.input_type === 'remote'",
-
-            ui.input_selectize(
-                "system_prefix",
-                "Select System",
-                choices=system_prefixes,
-                selected="laptop"
+    return ui.navset_tab(
+        ui.nav_panel("Data",
+            ui.input_numeric("insert_size", "Lineage reporter reference length (bp)", value=450),
+            ui.input_numeric("sample_n_umis", "Number of UMIs to sample", value=100),
+            ui.input_checkbox(
+                "sample_umis",
+                "sub-sample UMIs?",
+                value=True
                 ),
-            ui.input_selectize(
-                "remote_path", 
-                "Select Dataset",
-                choices=db,
+            ui.input_numeric("sample_min_reads", "Minimum number of reads per umi", value=100),
+            ui.input_text("provided_umi", "Provided UMI (optional)", value="", placeholder="Enter specific UMI to load"),
+            
+            # Coverage Plot Controls
+            ui.input_checkbox(
+                "enable_coverage_plot",
+                "Enable Coverage Plot",
+                value=True
                 ),
-            ),
+            ui.input_text(
+                "reference_sequence",
+                "Reference Sequence (optional)",
+                value="",
+                placeholder="Leave empty to use default from mods.parquet"
+                ),
+            #---
+            ui.hr(),
+            ui.h3("Data Input"),
+            ui.input_radio_buttons(
+                "input_type",
+                "Select Input Method",
+                {
+                    "upload": "Upload File",
+                    "remote": "Remote File Path",
+                    "local": "Local File Path"
+                    },
+                selected="local"
+                ),
+            ui.panel_conditional(
+                "input.input_type === 'remote'",
 
-        ui.panel_conditional(
-            "input.input_type === 'upload'",
-            ui.input_file("parquet_file", "Upload Parquet File", accept=[".parquet"])
-            ),
+                ui.input_selectize(
+                    "system_prefix",
+                    "Select System",
+                    choices=system_prefixes,
+                    selected="laptop"
+                    ),
+                ui.input_selectize(
+                    "remote_path", 
+                    "Select Dataset",
+                    choices=db,
+                    ),
+                ),
 
-        ui.panel_conditional(
-            "input.input_type === 'local'",
-            ui.input_text("parquet_file_local", "Local Parquet File", value='jijo.parquet')
-            ),
+            ui.panel_conditional(
+                "input.input_type === 'upload'",
+                ui.input_file("parquet_file", "Upload Parquet File", accept=[".parquet"])
+                ),
+
+            ui.panel_conditional(
+                "input.input_type === 'local'",
+                ui.input_text("parquet_file_local", "Local Parquet File", value='jijo.parquet')
+                ),
+        ),
+        ui.nav_panel("Hall of Fame",
+            ui.h4("Famous UMIs"),
+            ui.HTML("GGGCCTGCATCGCACTGTGG google<br>"),
+            ui.HTML("TTTTCCCGACGGCTGATCGG messy<br>"),
+            ui.HTML("AACATGGACGGTACATCGGG great example of horror<br>"),
+            ui.HTML("AACCCCAGAGGCTCAAGTGG full<br>"),
+            ui.HTML("GCTCGTATCCCGAAGCTAGG failed but overlaps<br>"),
+            ui.HTML("GATGCCTACCATCACTGTGG failed but overlaps<br>"),
+            ui.HTML("ATTGGCGGCACACTGTCCTG tricky <br>"),
+        ),
+        ui.nav_panel("Node Selection",
+            create_node_selection_controls()
+        ),
     )
 
 def create_assembly_controls():
@@ -167,12 +173,6 @@ def create_graph_controls():
                 "separate_components",
                 "Separate Disjoint Graphs",
                 value=False
-                ),
-            ui.input_text(
-                "selected_nodes",
-                "Highlight Nodes (comma-separated IDs)",
-                value="",
-                placeholder="e.g., node1, node2, node3"
                 ),
             ui.input_numeric(
                 "component_padding",
@@ -271,6 +271,62 @@ def create_parameter_sweep_controls():
             class_="btn-primary"
             ),
         ui.hr(),
+    )
+
+def create_node_selection_controls():
+    """Create unified node selection controls for both Assembly and DOT viewer graphs"""
+    return ui.div(
+        ui.h4("Graph Node Selection"),
+        ui.p("Control node highlighting for both Assembly Results and DOT Viewer graphs:"),
+        
+        ui.input_text(
+            "selected_nodes",
+            "Highlight by Node IDs (comma-separated)",
+            value="",
+            placeholder="e.g., n0, n1, n597"
+        ),
+        
+        ui.input_text(
+            "selected_sequences",
+            "Highlight by Sequences (comma-separated)",
+            value="",
+            placeholder="e.g., ATGCGTACGT, GCTAGCATCG"
+        ),
+        
+        ui.input_checkbox(
+            "apply_to_assembly",
+            "Apply to Assembly Graph",
+            value=True
+        ),
+        
+        ui.input_checkbox(
+            "apply_to_dot",
+            "Apply to DOT Viewer Graph",
+            value=True
+        ),
+        
+        ui.hr(),
+        
+        ui.div(
+            ui.input_action_button(
+                "apply_selection",
+                "Apply Selection",
+                class_="btn-primary",
+                style="margin-right: 10px;"
+            ),
+            ui.input_action_button(
+                "clear_selection",
+                "Clear Selection",
+                class_="btn-secondary"
+            ),
+            style="display: flex; gap: 10px;"
+        ),
+        
+        ui.div(
+            ui.p("Selected nodes will be highlighted with red borders and increased size."),
+            ui.p("Click 'Apply Selection' to update the graphs with your changes."),
+            style="margin-top: 15px; font-style: italic; color: #888; font-size: 0.9em;"
+        )
     )
 
 def create_theme_controls():
