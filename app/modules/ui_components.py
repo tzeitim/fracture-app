@@ -325,6 +325,18 @@ def create_node_selection_controls():
         ui.div(
             ui.p("Selected nodes will be highlighted with red borders and increased size."),
             ui.p("Click 'Apply Selection' to update the graphs with your changes."),
+            ui.p("Click nodes directly on the graph to select/deselect them."),
+            ui.hr(),
+            ui.div(
+                ui.strong("Selection Count: "),
+                ui.output_text("selection_count", inline=True),
+                style="margin-top: 10px; padding: 8px; background-color: rgba(0,123,255,0.1); border-radius: 4px;"
+            ),
+            ui.div(
+                ui.h5("Selected Nodes:"),
+                ui.output_ui("selected_nodes_table"),
+                style="margin-top: 15px; max-height: 200px; overflow-y: auto;"
+            ),
             style="margin-top: 15px; font-style: italic; color: #888; font-size: 0.9em;"
         )
     )

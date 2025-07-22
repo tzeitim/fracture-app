@@ -1,5 +1,5 @@
 from shiny import App, render, ui, reactive
-from shinywidgets import output_widget, render_plotly
+from shinywidgets import output_widget, render_widget
 import shinyswatch
 import polars as pl
 import os
@@ -198,6 +198,9 @@ def server(input, output, session):
     dataset = reactive.Value(None)
     current_template = reactive.Value(DARK_TEMPLATE)
     
+    # Node selection state management
+    clicked_nodes = reactive.Value(set())  # Store clicked node IDs
+    
     # Theme handling
     @reactive.Effect
     @reactive.event(input.app_theme)
@@ -240,9 +243,165 @@ def server(input, output, session):
     @reactive.Effect
     @reactive.event(input.clear_selection)
     def clear_node_selection():
-        # Clear both selection text inputs
+        # Clear both selection text inputs and clicked nodes
+        logger.info("Clear Selection button pressed!")
         ui.update_text("selected_nodes", value="")
         ui.update_text("selected_sequences", value="")
+        clicked_nodes.set(set())
+        ui.notification_show("Selection cleared!", type="message", duration=2)
+        
+        # Debug: Log all available inputs to see what selection events exist
+        all_inputs = [attr for attr in dir(input) if not attr.startswith('_')]
+        selection_inputs = [attr for attr in all_inputs if 'select' in attr.lower() or 'click' in attr.lower()]
+        graph_inputs = [attr for attr in all_inputs if 'graph' in attr.lower()]
+        logger.info(f"Selection-related inputs: {selection_inputs}")
+        logger.info(f"Graph-related inputs: {graph_inputs}")
+        
+        # Debug: Check current values of click inputs and any selection inputs
+        try:
+            assembly_click = input.assembly_graph_click()
+            dot_click = input.dot_graph_click()
+            logger.info(f"Current assembly_graph_click value: {assembly_click}")
+            logger.info(f"Current dot_graph_click value: {dot_click}")
+            
+            # Check current values of dot_graph_click specifically
+            if 'dot_graph_click' in all_inputs:
+                logger.info(f"dot_graph_click is available - checking value...")
+                try:
+                    dot_click_value = input.dot_graph_click()
+                    logger.info(f"dot_graph_click current value: {dot_click_value}")
+                except Exception as dot_e:
+                    logger.info(f"Error accessing dot_graph_click: {dot_e}")
+                        
+        except Exception as e:
+            logger.info(f"Error in debug section: {e}")
+            import traceback
+            logger.debug(f"Full traceback: {traceback.format_exc()}")
+    
+    # Apply Selection button behavior is handled by the graph reactive events
+    
+    # Store previous click data to detect changes
+    previous_dot_click = reactive.Value(None)
+    
+    @reactive.Effect
+    def poll_dot_graph_selection():
+        # Poll for changes in DOT graph selection
+        try:
+            current_click = input.dot_graph_click()
+            prev_click = previous_dot_click.get()
+            
+            # Check if click data changed
+            if current_click != prev_click:
+                logger.info(f"DOT graph selection changed! From: {prev_click} To: {current_click}")
+                previous_dot_click.set(current_click)
+                
+                if current_click is not None and current_click != {}:
+                    ui.notification_show(f"DOT Graph selection changed! Data: {str(current_click)[:100]}", type="message", duration=3)
+                    
+                    # Try to extract selected node data
+                    if isinstance(current_click, dict):
+                        # Look for selection data in various possible formats
+                        points = current_click.get('points', [])
+                        if points:
+                            logger.info(f"Found points in click data: {points}")
+                            
+        except Exception as e:
+            logger.debug(f"Error polling DOT selection: {e}")
+    
+    @reactive.Effect
+    @reactive.event(input.dot_graph_click)
+    def handle_dot_graph_click():
+        # Handle clicks on the DOT viewer graph
+        click_data = input.dot_graph_click()
+        logger.info(f"DOT graph click event triggered! Data: {click_data}")
+        # Show notification to user for immediate feedback
+        ui.notification_show(f"DOT graph clicked! Data: {str(click_data)[:100]}", type="message", duration=3)
+        
+        if click_data is not None:
+            try:
+                logger.info(f"Full DOT click data structure: {click_data}")
+                # Extract node information from click data
+                points = click_data.get('points', [])
+                if points:
+                    point = points[0]
+                    custom_data = point.get('customdata')
+                    
+                    logger.info(f"DOT Custom data: {custom_data}")
+                    
+                    if custom_data is not None:
+                        # The custom data should contain the node ID
+                        node_id = str(custom_data)
+                        logger.info(f"Clicked on DOT viewer node: {node_id}")
+                        
+                        # Toggle node selection (shared with assembly graph)
+                        current_selection = clicked_nodes.get().copy()
+                        if node_id in current_selection:
+                            current_selection.discard(node_id)
+                            logger.info(f"Removed node {node_id} from selection")
+                        else:
+                            current_selection.add(node_id)
+                            logger.info(f"Added node {node_id} to selection")
+                        
+                        clicked_nodes.set(current_selection)
+                        
+                        # Update the text input to show clicked nodes
+                        if current_selection:
+                            node_list = ", ".join(sorted(current_selection))
+                            ui.update_text("selected_nodes", value=node_list)
+                        else:
+                            ui.update_text("selected_nodes", value="")
+                            
+            except Exception as e:
+                logger.error(f"Error handling DOT graph click: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+    
+    @output
+    @render.text
+    def selection_count():
+        """Display the current selection count"""
+        try:
+            current_nodes = clicked_nodes.get()
+            count = len(current_nodes)
+            logger.info(f"Selection count function called: {count} nodes - {list(current_nodes)}")
+            
+            if count == 0:
+                return "None selected"
+            elif count == 1:
+                return f"1 node selected: {list(current_nodes)[0]}"
+            else:
+                return f"{count} nodes selected: {', '.join(list(current_nodes))}"
+        except Exception as e:
+            logger.error(f"Error in selection_count: {e}")
+            return f"Error: {str(e)}"
+    
+    @output
+    @render.ui
+    def selected_nodes_table():
+        """Display selected nodes as a table"""
+        try:
+            current_nodes = clicked_nodes.get()
+            if not current_nodes:
+                return ui.div(ui.p("No nodes selected", style="font-style: italic; color: #888;"))
+            
+            # Create a simple table of selected nodes
+            table_rows = []
+            for i, node_id in enumerate(sorted(current_nodes), 1):
+                table_rows.append(
+                    ui.div(
+                        ui.span(f"{i}. ", style="font-weight: bold; color: #007bff;"),
+                        ui.span(node_id, style="font-family: monospace; background-color: #f8f9fa; padding: 2px 6px; border-radius: 3px;"),
+                        style="margin: 3px 0; display: flex; align-items: center;"
+                    )
+                )
+            
+            return ui.div(
+                *table_rows,
+                style="background-color: #f8f9fa; padding: 10px; border-radius: 5px; border-left: 3px solid #007bff;"
+            )
+        except Exception as e:
+            logger.error(f"Error in selected_nodes_table: {e}")
+            return ui.div(ui.p(f"Error: {str(e)}", style="color: red;"))
     
     @output
     @render.ui
@@ -483,12 +642,12 @@ def server(input, output, session):
             return "Error calculating UMI stats"
             
     @output
-    @render_plotly
+    @render_widget
     def coverage_dist():
         return create_coverage_distribution_plot(data())
 
     @output
-    @render_plotly
+    @render_widget
     def reads_per_umi():
         import plotly.express as px
         return create_reads_per_umi_plot(data())
@@ -731,7 +890,7 @@ def server(input, output, session):
             return ui.div(output_widget("coverage_plot"), style="height: 500px;")
 
     @output
-    @render_plotly
+    @render_widget
     @reactive.event(input.umi, data, assembly_result, input.app_theme, input.enable_coverage_plot, input.reference_sequence)
     def coverage_plot():
         # Only generate plot if enabled
@@ -881,7 +1040,7 @@ def server(input, output, session):
             return empty_fig
 
     @output
-    @render_plotly
+    @render_widget
     @reactive.event(sweep_results, input.app_theme)
     def sweep_heatmap():
         if sweep_results() is None:
@@ -932,11 +1091,11 @@ def server(input, output, session):
         return fig
 
     @output
-    @render_plotly
+    @render_widget
     @reactive.event(input.use_weighted, input.draw_graph, input.assemble, input.app_theme, 
                    input.separate_components, input.component_padding, input.min_component_size,
                    input.layout_k, input.layout_iterations, input.layout_scale,
-                   input.weight_method, input.graph_type, input.apply_selection)
+                   input.weight_method, input.graph_type, input.apply_selection, clicked_nodes)
     def assembly_graph():
         if assembly_result() is None:
             empty_fig = go.Figure(layout=current_template()['layout'])
@@ -989,10 +1148,19 @@ def server(input, output, session):
         selected_sequences = None
         
         if input.apply_to_assembly():
-            # Parse node IDs
+            # Start with clicked nodes
+            all_selected_nodes = set(clicked_nodes.get())
+            
+            # Add nodes from text input
             if input.selected_nodes() and input.selected_nodes().strip():
-                selected_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
-                logger.debug(f"Parsed selected nodes for assembly graph: {selected_nodes}")
+                text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+                all_selected_nodes.update(text_nodes)
+                logger.debug(f"Text input nodes for assembly graph: {text_nodes}")
+            
+            # Convert to list if we have any selected nodes
+            if all_selected_nodes:
+                selected_nodes = list(all_selected_nodes)
+                logger.debug(f"All selected nodes for assembly graph: {selected_nodes}")
             
             # Parse sequences
             if input.selected_sequences() and input.selected_sequences().strip():
@@ -1098,9 +1266,10 @@ def server(input, output, session):
         return fig
 
     @output
-    @render_plotly
-    @reactive.event(input.dot_file, input.app_theme, input.dot_weighted, input.dot_weight_method, input.dot_separate_components, input.apply_selection)
+    @render_widget
+    @reactive.event(input.dot_file, input.app_theme, input.dot_weighted, input.dot_weight_method, input.dot_separate_components, input.apply_selection, clicked_nodes)
     def dot_graph():
+        logger.info("Rendering DOT graph widget")
         if input.dot_file() is None:
             empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
@@ -1127,10 +1296,19 @@ def server(input, output, session):
             selected_sequences = None
             
             if input.apply_to_dot():
-                # Parse node IDs
+                # Start with clicked nodes
+                all_selected_nodes = set(clicked_nodes.get())
+                
+                # Add nodes from text input
                 if input.selected_nodes() and input.selected_nodes().strip():
-                    selected_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
-                    logger.debug(f"Parsed selected nodes for DOT viewer: {selected_nodes}")
+                    text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+                    all_selected_nodes.update(text_nodes)
+                    logger.debug(f"Text input nodes for DOT viewer: {text_nodes}")
+                
+                # Convert to list if we have any selected nodes
+                if all_selected_nodes:
+                    selected_nodes = list(all_selected_nodes)
+                    logger.debug(f"All selected nodes for DOT viewer: {selected_nodes}")
                 
                 # Parse sequences
                 if input.selected_sequences() and input.selected_sequences().strip():
@@ -1168,6 +1346,14 @@ def server(input, output, session):
                 autosize=True,
                 margin=dict(b=60),
             )
+            
+            # Add debug info about the figure
+            node_traces = [t for t in fig.data if hasattr(t, 'name') and t.name == 'nodes']
+            logger.info(f"DOT graph figure: {len(fig.data)} traces, {len(node_traces)} node traces")
+            if node_traces:
+                logger.info(f"Node trace has customdata: {hasattr(node_traces[0], 'customdata')}")
+                if hasattr(node_traces[0], 'customdata'):
+                    logger.info(f"Customdata length: {len(node_traces[0].customdata) if node_traces[0].customdata else 0}")
             
             return fig
             

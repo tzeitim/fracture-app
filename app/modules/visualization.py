@@ -340,6 +340,7 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
             font=dict(color=text_color)
         ),
         hovermode='closest',
+        clickmode='event+select',  # Enable click events
         margin=dict(b=40, l=20, r=20, t=40),
         annotations=[dict(
             text="Assembly Graph",
@@ -525,6 +526,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
     node_colors = []
     node_sizes = []
     hover_texts = []
+    custom_data = []  # Store node IDs for click handling
     coverages = []
 
     # First pass to collect coverage values for scaling
@@ -553,6 +555,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
             x, y = pos[node]
             node_x.append(x)
             node_y.append(y)
+            custom_data.append(node)  # Store node ID for click handling
 
             attrs = graph.nodes[node]
             label = attrs.get('label', '')
@@ -611,7 +614,8 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
             hoverinfo='text',
             hovertext=edge_texts,
             mode='lines',
-            showlegend=False
+            showlegend=False,
+            name='edges'
         ))
 
         # Add nodes
@@ -625,18 +629,37 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
 
         fig.add_trace(go.Scatter(
             x=node_x, y=node_y,
-            mode='markers',
+            mode='markers+text',
             hoverinfo='text',
             hovertext=hover_texts,
             text=node_labels,
             textposition="bottom center",
             textfont=dict(size=12),
             marker=node_marker,
-            showlegend=False
+            customdata=custom_data,  # Add node IDs for click handling
+            showlegend=False,
+            name='nodes',
+            # Configure for better click handling
+            hoveron='points'
         ))
 
         # Update layout
         update_figure_layout(fig, dark_mode, node_x, node_y)
+        
+        # Configure for Shiny integration - enable events
+        fig.update_layout(
+            uirevision=True,  # Preserve UI state
+            clickmode='event+select',  # Ensure click events are enabled
+            dragmode='pan',  # Set drag mode to pan to avoid conflicts with selection
+        )
+        
+        # Ensure all traces can generate click events
+        for trace in fig.data:
+            if hasattr(trace, 'name') and trace.name == 'nodes':
+                trace.update(
+                    selected=dict(marker=dict(color='red', size=15)),  # Configure selection appearance
+                    unselected=dict(marker=dict(opacity=0.7))  # Configure unselected appearance
+                )
         
         # Make absolutely sure we're returning a proper Plotly figure
         if not isinstance(fig, go.Figure):
