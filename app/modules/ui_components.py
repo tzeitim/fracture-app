@@ -29,6 +29,19 @@ def create_data_input_sidebar(db=None, system_prefixes=None):
             ),
         ui.input_numeric("sample_min_reads", "Minimum number of reads per umi", value=100),
         ui.input_text("provided_umi", "Provided UMI (optional)", value="", placeholder="Enter specific UMI to load"),
+        
+        # Coverage Plot Controls
+        ui.input_checkbox(
+            "enable_coverage_plot",
+            "Enable Coverage Plot",
+            value=True
+            ),
+        ui.input_text(
+            "reference_sequence",
+            "Reference Sequence (optional)",
+            value="",
+            placeholder="Leave empty to use default from mods.parquet"
+            ),
         #---
         ui.hr(),
         ui.h3("Data Input"),
@@ -109,18 +122,6 @@ def create_assembly_controls():
             "Auto K-mer Size",
             value=False
             ),
-        ui.hr(),
-        ui.input_checkbox(
-            "enable_coverage_plot",
-            "Enable Coverage Plot",
-            value=True
-            ),
-        ui.input_text(
-            "reference_sequence",
-            "Reference Sequence (optional)",
-            value="",
-            placeholder="Leave empty to use default from mods.parquet"
-            ),
     )
 
 def create_graph_controls():
@@ -178,7 +179,7 @@ def create_graph_controls():
             ui.input_numeric(
                 "min_component_size",
                 "Min Component Size",
-                value=3,
+                value=1,
                 min=1,
                 max=20,
                 step=1
