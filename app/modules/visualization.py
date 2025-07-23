@@ -636,11 +636,14 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
             textposition="bottom center",
             textfont=dict(size=12),
             marker=node_marker,
-            customdata=custom_data,  # Add node IDs for click handling
+            customdata=custom_data,  # This MUST be the node IDs
             showlegend=False,
             name='nodes',
-            # Configure for better click handling
-            hoveron='points'
+            hoveron='points',
+            # Add this to ensure selection works:
+            selectedpoints=[],
+            selected=dict(marker=dict(color='red', size=15)),
+            unselected=dict(marker=dict(opacity=0.7))
         ))
 
         # Update layout
@@ -666,7 +669,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
             print(f"Error: Expected go.Figure but got {type(fig)}")
             return create_empty_figure("Error creating graph visualization")
             
-        return fig
+        return go.FigureWidget(fig)  # Convert to FigureWidget for interactivity
     except Exception as e:
         print(f"Error creating figure: {str(e)}")
         return create_empty_figure(f"Error creating graph: {str(e)}")

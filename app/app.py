@@ -280,81 +280,7 @@ def server(input, output, session):
     
     # Apply Selection button behavior is handled by the graph reactive events
     
-    # Store previous click data to detect changes
-    previous_dot_click = reactive.Value(None)
     
-    @reactive.Effect
-    def poll_dot_graph_selection():
-        # Poll for changes in DOT graph selection
-        try:
-            current_click = input.dot_graph_click()
-            prev_click = previous_dot_click.get()
-            
-            # Check if click data changed
-            if current_click != prev_click:
-                logger.info(f"DOT graph selection changed! From: {prev_click} To: {current_click}")
-                previous_dot_click.set(current_click)
-                
-                if current_click is not None and current_click != {}:
-                    ui.notification_show(f"DOT Graph selection changed! Data: {str(current_click)[:100]}", type="message", duration=3)
-                    
-                    # Try to extract selected node data
-                    if isinstance(current_click, dict):
-                        # Look for selection data in various possible formats
-                        points = current_click.get('points', [])
-                        if points:
-                            logger.info(f"Found points in click data: {points}")
-                            
-        except Exception as e:
-            logger.debug(f"Error polling DOT selection: {e}")
-    
-    @reactive.Effect
-    @reactive.event(input.dot_graph_click)
-    def handle_dot_graph_click():
-        # Handle clicks on the DOT viewer graph
-        click_data = input.dot_graph_click()
-        logger.info(f"DOT graph click event triggered! Data: {click_data}")
-        # Show notification to user for immediate feedback
-        ui.notification_show(f"DOT graph clicked! Data: {str(click_data)[:100]}", type="message", duration=3)
-        
-        if click_data is not None:
-            try:
-                logger.info(f"Full DOT click data structure: {click_data}")
-                # Extract node information from click data
-                points = click_data.get('points', [])
-                if points:
-                    point = points[0]
-                    custom_data = point.get('customdata')
-                    
-                    logger.info(f"DOT Custom data: {custom_data}")
-                    
-                    if custom_data is not None:
-                        # The custom data should contain the node ID
-                        node_id = str(custom_data)
-                        logger.info(f"Clicked on DOT viewer node: {node_id}")
-                        
-                        # Toggle node selection (shared with assembly graph)
-                        current_selection = clicked_nodes.get().copy()
-                        if node_id in current_selection:
-                            current_selection.discard(node_id)
-                            logger.info(f"Removed node {node_id} from selection")
-                        else:
-                            current_selection.add(node_id)
-                            logger.info(f"Added node {node_id} to selection")
-                        
-                        clicked_nodes.set(current_selection)
-                        
-                        # Update the text input to show clicked nodes
-                        if current_selection:
-                            node_list = ", ".join(sorted(current_selection))
-                            ui.update_text("selected_nodes", value=node_list)
-                        else:
-                            ui.update_text("selected_nodes", value="")
-                            
-            except Exception as e:
-                logger.error(f"Error handling DOT graph click: {str(e)}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
     
     @output
     @render.text
@@ -1271,7 +1197,8 @@ def server(input, output, session):
     def dot_graph():
         logger.info("Rendering DOT graph widget")
         if input.dot_file() is None:
-            empty_fig = go.Figure(layout=current_template()['layout'])
+            # Return empty FigureWidget (not Figure)
+            empty_fig = go.FigureWidget(layout=current_template()['layout'])
             empty_fig.update_layout(
                 height=800,
                 autosize=True,
@@ -1315,62 +1242,76 @@ def server(input, output, session):
                     selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
                     logger.debug(f"Parsed selected sequences for DOT viewer: {selected_sequences}")
             
-            # Create graph visualization using existing function
-            dark_mode = input.app_theme() != "latte"  # Only latte is light mode
+            # Create the figure using create_graph_plot
             fig = create_graph_plot(
-                dot_file_path,
-                dark_mode=dark_mode,
-                line_shape='linear',
-                graph_type='custom',  # Custom type for uploaded files
-                path_nodes=None,
+                dot_file_path, 
+                dark_mode=(input.app_theme() != "latte"),
                 weighted=input.dot_weighted(),
                 weight_method=input.dot_weight_method(),
                 separate_components=input.dot_separate_components(),
-                component_padding=3.0,
-                min_component_size=3,
-                spring_args={
-                    'k': 0.001,
-                    'iterations': 500,
-                    'scale': 2.0,
-                },
+                component_padding=input.component_padding(),
+                min_component_size=input.min_component_size(),
                 selected_nodes=selected_nodes,
                 selected_sequences=selected_sequences,
-                debug=True
+                spring_args={
+                    'k': input.layout_k(), 
+                    'iterations': input.layout_iterations(), 
+                    'scale': input.layout_scale()
+                }
             )
             
-            if not isinstance(fig, go.Figure):
-                raise ValueError(f"Expected Figure, got {type(fig)}")
+            # CRITICAL: Convert to FigureWidget for interactivity
+            fig_widget = go.FigureWidget(fig)
+            
+            # Add click handler directly to the widget
+            def on_click(trace, points, selector):
+                if not points.point_inds:
+                    return
+                    
+                # Get the clicked point index
+                point_ind = points.point_inds[0]
                 
-            fig.update_layout(
-                height=800,
-                autosize=True,
-                margin=dict(b=60),
-            )
+                # Get node ID from customdata
+                if hasattr(trace, 'customdata') and trace.customdata is not None:
+                    node_id = str(trace.customdata[point_ind])
+                    logger.info(f"DOT widget clicked: {node_id}")
+                    
+                    # Update selection
+                    current_selection = clicked_nodes.get().copy()
+                    
+                    if node_id in current_selection:
+                        current_selection.discard(node_id)
+                        ui.notification_show(f"Deselected node: {node_id}", type="message", duration=2)
+                    else:
+                        current_selection.add(node_id)
+                        ui.notification_show(f"Selected node: {node_id}", type="message", duration=2)
+                    
+                    # Update reactive state
+                    clicked_nodes.set(current_selection)
+                    
+                    # Update text input
+                    ui.update_text("selected_nodes", 
+                                  value=", ".join(sorted(current_selection)) if current_selection else "")
             
-            # Add debug info about the figure
-            node_traces = [t for t in fig.data if hasattr(t, 'name') and t.name == 'nodes']
-            logger.info(f"DOT graph figure: {len(fig.data)} traces, {len(node_traces)} node traces")
-            if node_traces:
-                logger.info(f"Node trace has customdata: {hasattr(node_traces[0], 'customdata')}")
-                if hasattr(node_traces[0], 'customdata'):
-                    logger.info(f"Customdata length: {len(node_traces[0].customdata) if node_traces[0].customdata else 0}")
+            # Attach click handler to the nodes trace
+            for i, trace in enumerate(fig_widget.data):
+                if hasattr(trace, 'name') and trace.name == 'nodes':
+                    trace.on_click(on_click)
+                    break
             
-            return fig
+            return fig_widget
             
         except Exception as e:
-            logger.error(f"Error visualizing DOT file: {str(e)}")
-            error_fig = go.Figure(layout=current_template()['layout'])
+            logger.error(f"Error creating DOT graph: {e}")
+            error_fig = go.FigureWidget(layout=current_template()['layout'])
             error_fig.update_layout(
                 height=800,
-                autosize=True,
                 annotations=[dict(
-                    text=f"Error loading DOT file: {str(e)}",
-                    xref="paper",
-                    yref="paper",
-                    x=0.5,
-                    y=0.5,
+                    text=f"Error: {str(e)}",
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5,
                     showarrow=False,
-                    font=dict(color='#ffffff', size=14)
+                    font=dict(color='#ff0000', size=14)
                 )]
             )
             return error_fig
