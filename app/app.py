@@ -30,6 +30,12 @@ from modules.ui_components import (
     create_parameter_sweep_controls, create_theme_controls
 )
 
+
+
+
+os.environ['NUMEXPR_MAX_THREADS'] = '4'
+os.environ['OMP_NUM_THREADS'] = '4'
+
 # Configure polars for pretty printing
 pl.Config().set_fmt_str_lengths(666)
 
@@ -189,15 +195,15 @@ def server(input, output, session):
         
         if selected_theme == "latte":
             # Update application theme
-            session.send_custom_message("shinyswatch-theme", "minty")
+            #session.send_custom_message("shinyswatch-theme", "minty")
             current_template.set(LATTE_TEMPLATE)
         elif selected_theme == "mocha":
             # Update application theme
-            session.send_custom_message("shinyswatch-theme", "darkly")
+            #session.send_custom_message("shinyswatch-theme", "darkly")
             current_template.set(MOCHA_TEMPLATE)
         else:
             # Default slate theme
-            session.send_custom_message("shinyswatch-theme", "slate")
+            #session.send_custom_message("shinyswatch-theme", "slate")
             current_template.set(DARK_TEMPLATE)
     
     # Update the dataset dropdown when system changes
@@ -463,15 +469,17 @@ def server(input, output, session):
                 
             # Successfully loaded data
             logger.info(f"Successfully loaded data with shape: {df.shape}")
-            logger.debug(f"Data columns: {df.columns}")
+            logger.info(f"Data columns: {df.columns}")
             
             dataset.set(file_path_or_error)
             data.set(df)
             ui.notification_show(f"Successfully loaded data from {file_path_or_error}")
+            logger.info(f"Successfully loaded data from {file_path_or_error}")
             
             # Update UMI choices
             umis = get_umis(df)
-            logger.debug(f"Found {len(umis)} UMIs")
+            logger.info(f"Found {len(umis)} UMIs")
+            ui.notification_show(f"Found {len(umis)} UMIs")
             ui.update_selectize(
                 "umi",
                 choices=umis,
@@ -482,7 +490,7 @@ def server(input, output, session):
             import traceback
             error_msg = f"Error loading data: {str(e)}"
             logger.error(error_msg)
-            logger.debug(f"Traceback: {traceback.format_exc()}")
+            logger.info(f"Traceback: {traceback.format_exc()}")
             
             with reactive.isolate():
                 data.set(None)
@@ -909,17 +917,17 @@ def server(input, output, session):
             return empty_fig
             
         except Exception as e:
-            import traceback
-            error_msg = f"Coverage plot error: {str(e)}"
+            error_msg = f"Unexpected error in coverage plot: {str(e)}"
             logger.error(error_msg)
-            logger.debug(f"Traceback: {traceback.format_exc()}")
+            import traceback
+            logger.debug(f"Coverage plot traceback: {traceback.format_exc()}")
             
             empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
                 height=500,
                 autosize=True,
                 annotations=[dict(
-                    text=f"Error: {str(e)[:100]}{'...' if len(str(e)) > 100 else ''}",
+                    text="Coverage plot error - check logs for details",
                     xref="paper",
                     yref="paper",
                     x=0.5,
