@@ -669,7 +669,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
             print(f"Error: Expected go.Figure but got {type(fig)}")
             return create_empty_figure("Error creating graph visualization")
             
-        return go.FigureWidget(fig)  # Convert to FigureWidget for interactivity
+        return fig  # Return Figure object, conversion to FigureWidget happens in render function
     except Exception as e:
         print(f"Error creating figure: {str(e)}")
         return create_empty_figure(f"Error creating graph: {str(e)}")

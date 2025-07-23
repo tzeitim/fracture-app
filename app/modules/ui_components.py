@@ -83,8 +83,10 @@ def create_data_input_sidebar(db=None, system_prefixes=None):
             ui.HTML("GATGCCTACCATCACTGTGG failed but overlaps<br>"),
             ui.HTML("ATTGGCGGCACACTGTCCTG tricky <br>"),
         ),
-        ui.nav_panel("Node Selection",
-            create_node_selection_controls()
+        ui.nav_panel("Graph",
+            create_graph_source_controls(),
+            create_node_selection_controls(),
+            create_graph_controls()
         ),
     )
 
@@ -130,90 +132,116 @@ def create_assembly_controls():
             ),
     )
 
-def create_graph_controls():
-    """Create the graph control panel"""
+def create_graph_source_controls():
+    """Create controls for selecting graph source"""
     return ui.panel_well(
-        ui.h4("Assembly Graph"),
-        ui.input_action_button(
-            "draw_graph",
-            "Draw Graph",
-            class_="btn-primary"
-            ),
-        ui.panel_well(
+        ui.h4("Graph Source"),
+        ui.input_radio_buttons(
+            "graph_source",
+            "Select graph source:",
+            choices={
+                "assembly": "Generate from Assembly",
+                "upload": "Upload DOT File"
+            },
+            selected="assembly"
+        ),
+        
+        # Show assembly controls when "assembly" is selected
+        ui.panel_conditional(
+            "input.graph_source === 'assembly'",
+            ui.hr(),
+            ui.h5("Assembly Settings"),
             ui.input_select(
                 "graph_type",
-                "Graph Plot Settings",
-                choices={
-                    "compressed": "Compressed Graph",
-                    "preliminary": "Preliminary Graph"
-                    },
+                "Graph Type:",
+                choices={"compressed": "Compressed", "preliminary": "Preliminary"},
                 selected="compressed"
-                ),
             ),
-        ui.panel_well(
-            ui.h4("Graph Layout Options"),
-            ui.input_switch(
-                "use_weighted",
-                "Use Weighted Layout",
-                value=False
-                ),
-            ui.input_select(
-                "weight_method",
-                "Weight Calculation Method",
-                choices={
-                    "nlog": "Negative Log Coverage",
-                    "inverse": "Inverse Coverage"
-                    },
-                selected="inverse"
-                )
+            ui.input_action_button(
+                "generate_graph",
+                "Generate Graph",
+                class_="btn-primary"
+            )
+        ),
+        
+        # Show upload controls when "upload" is selected
+        ui.panel_conditional(
+            "input.graph_source === 'upload'",
+            ui.hr(),
+            ui.h5("Upload DOT File"),
+            ui.input_file(
+                "dot_file",
+                "Choose .dot file:",
+                accept=[".dot"],
+                multiple=False
+            )
+        ),
+    )
+
+def create_graph_controls():
+    """Create the graph display control panel"""
+    return ui.panel_well(
+        ui.h4("Graph Display Options"),
+        ui.input_switch(
+            "use_weighted",
+            "Use Weighted Layout",
+            value=False
             ),
-        ui.panel_well(
-            ui.h4("Graph Layout Parameters"),
-            ui.input_switch(
-                "separate_components",
-                "Separate Disjoint Graphs",
-                value=False
-                ),
-            ui.input_numeric(
-                "component_padding",
-                "Component Spacing",
-                value=3.0,
-                min=0.5,
-                max=10.0,
-                step=0.5
-                ),
-            ui.input_numeric(
-                "min_component_size",
-                "Min Component Size",
-                value=1,
-                min=1,
-                max=20,
-                step=1
-                ),
-            ui.input_numeric(
-                "layout_k",
-                "Node Spacing (k)",
-                value=0.001,
-                min=0,
-                max=5.0,
-                step=0.001,
-                ),
-            ui.input_numeric(
-                "layout_iterations",
-                "Layout Iterations",
-                value=500,
-                min=10,
-                max=2000,
-                step=10
-                ),
-            ui.input_numeric(
-                "layout_scale",
-                "Layout Scale",
-                value=2.0,
-                min=0.5,
-                max=5.0,
-                step=0.5
-                ),
+        ui.input_select(
+            "weight_method",
+            "Weight Calculation Method",
+            choices={
+                "nlog": "Negative Log Coverage",
+                "inverse": "Inverse Coverage"
+                },
+            selected="inverse"
+            ),
+        ui.hr(),
+        ui.h5("Layout Parameters"),
+        ui.input_switch(
+            "separate_components",
+            "Separate Disjoint Graphs",
+            value=False
+            ),
+        ui.input_numeric(
+            "component_padding",
+            "Component Spacing",
+            value=3.0,
+            min=0.5,
+            max=10.0,
+            step=0.5
+            ),
+        ui.input_numeric(
+            "min_component_size",
+            "Min Component Size",
+            value=1,
+            min=1,
+            max=20,
+            step=1
+            ),
+        ui.input_numeric(
+            "layout_k",
+            "Node Spacing (k)",
+            value=0.001,
+            min=0,
+            max=5.0,
+            step=0.001,
+            ),
+        ui.input_numeric(
+            "layout_iterations",
+            "Layout Iterations",
+            value=500,
+            min=10,
+            max=2000,
+            step=10
+            ),
+        ui.input_numeric(
+            "layout_scale",
+            "Layout Scale",
+            value=2.0,
+            min=0.5,
+            max=5.0,
+            step=0.5
             ),
     )
 
@@ -274,71 +302,30 @@ def create_parameter_sweep_controls():
     )
 
 def create_node_selection_controls():
-    """Create unified node selection controls for both Assembly and DOT viewer graphs"""
-    return ui.div(
-        ui.h4("Graph Node Selection"),
-        ui.p("Control node highlighting for both Assembly Results and DOT Viewer graphs:"),
+    """Create unified node selection controls"""
+    return ui.panel_well(
+        ui.h4("Node Selection"),
+        ui.p("Click nodes in the graph or enter IDs/sequences below"),
         
         ui.input_text(
             "selected_nodes",
-            "Highlight by Node IDs (comma-separated)",
+            "Node IDs (comma-separated):",
             value="",
             placeholder="e.g., n0, n1, n597"
         ),
         
         ui.input_text(
             "selected_sequences",
-            "Highlight by Sequences (comma-separated)",
+            "Sequences (comma-separated):",
             value="",
             placeholder="e.g., ATGCGTACGT, GCTAGCATCG"
         ),
         
-        ui.input_checkbox(
-            "apply_to_assembly",
-            "Apply to Assembly Graph",
-            value=True
+        ui.input_action_button(
+            "clear_selection",
+            "Clear Selection",
+            class_="btn-secondary"
         ),
-        
-        ui.input_checkbox(
-            "apply_to_dot",
-            "Apply to DOT Viewer Graph",
-            value=True
-        ),
-        
-        ui.hr(),
-        
-        ui.div(
-            ui.input_action_button(
-                "apply_selection",
-                "Apply Selection",
-                class_="btn-primary",
-                style="margin-right: 10px;"
-            ),
-            ui.input_action_button(
-                "clear_selection",
-                "Clear Selection",
-                class_="btn-secondary"
-            ),
-            style="display: flex; gap: 10px;"
-        ),
-        
-        ui.div(
-            ui.p("Selected nodes will be highlighted with red borders and increased size."),
-            ui.p("Click 'Apply Selection' to update the graphs with your changes."),
-            ui.p("Click nodes directly on the graph to select/deselect them."),
-            ui.hr(),
-            ui.div(
-                ui.strong("Selection Count: "),
-                ui.output_text("selection_count", inline=True),
-                style="margin-top: 10px; padding: 8px; background-color: rgba(0,123,255,0.1); border-radius: 4px;"
-            ),
-            ui.div(
-                ui.h5("Selected Nodes:"),
-                ui.output_ui("selected_nodes_table"),
-                style="margin-top: 15px; max-height: 200px; overflow-y: auto;"
-            ),
-            style="margin-top: 15px; font-style: italic; color: #888; font-size: 0.9em;"
-        )
     )
 
 def create_theme_controls():

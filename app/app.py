@@ -26,8 +26,8 @@ from modules.visualization import (
 )
 from modules.ui_components import (
     create_data_input_sidebar, create_assembly_controls, 
-    create_graph_controls, create_parameter_sweep_controls,
-    create_theme_controls
+    create_graph_source_controls, create_graph_controls, 
+    create_parameter_sweep_controls, create_theme_controls
 )
 
 # Configure polars for pretty printing
@@ -90,6 +90,19 @@ app_ui = ui.page_fluid(
                     )
                 )
             ),
+            ui.nav_panel("Graph Explorer",
+                ui.row(
+                    ui.column(12,
+                        ui.h4("Graph Visualization"),
+                        ui.panel_well(
+                            ui.div(output_widget("unified_graph"), style="min-height: 800px; height: auto; width: 100%")
+                        ),
+                        ui.hr(),
+                        ui.output_text("selection_count"),
+                        ui.output_ui("selected_nodes_table")
+                    )
+                )
+            ),
             ui.nav_panel("Assembly Results",
                 ui.row(
                     ui.panel_well(
@@ -98,27 +111,18 @@ app_ui = ui.page_fluid(
                     )
                 ),
                 ui.row(
-                    ui.column(6,
+                    ui.column(3,
+                        create_assembly_controls()
+                    ),
+                    ui.column(4,
                         ui.panel_well(
                             ui.output_ui("assembly_stats"),
                         ),
                     ),
-                    ui.column(6,
+                    ui.column(5,
                         ui.h4("Coverage Plot (from uniqued reads!!)"),
                         ui.output_ui("coverage_plot_container")
                     ),
-                ),
-                ui.row(
-                    ui.column(2, 
-                        create_assembly_controls(),
-                        create_graph_controls()
-                    ),
-                    ui.column(10,
-                        ui.panel_well(
-                            ui.div(output_widget("assembly_graph"), style="min-height: 1000px; height: auto; width: 100%")
-                        )
-                    ),
-                    ui.column(2,)
                 ),
             ),
             ui.nav_panel("Sweep Results",
@@ -130,34 +134,6 @@ app_ui = ui.page_fluid(
                         ui.panel_well(
                             ui.h4("K-mer vs Coverage Sweep"),
                             ui.div(output_widget("sweep_heatmap"), style="height: 500px;"),
-                        )
-                    ),
-                ),
-            ),
-            ui.nav_panel("DOT Viewer",
-                ui.row(
-                    ui.column(3,
-                        ui.panel_well(
-                            ui.h4("Upload DOT File"),
-                            ui.input_file("dot_file", "Select DOT File", accept=[".dot"]),
-                            ui.hr(),
-                            ui.h4("Graph Display Options"),
-                            ui.input_switch("dot_weighted", "Use Weighted Layout", value=False),
-                            ui.input_select(
-                                "dot_weight_method",
-                                "Weight Method",
-                                choices={
-                                    "nlog": "Negative Log Coverage",
-                                    "inverse": "Inverse Coverage"
-                                },
-                                selected="inverse"
-                            ),
-                            ui.input_switch("dot_separate_components", "Separate Components", value=False),
-                        )
-                    ),
-                    ui.column(9,
-                        ui.panel_well(
-                            ui.div(output_widget("dot_graph"), style="min-height: 800px; height: auto; width: 100%")
                         )
                     ),
                 ),
@@ -200,6 +176,10 @@ def server(input, output, session):
     
     # Node selection state management
     clicked_nodes = reactive.Value(set())  # Store clicked node IDs
+    
+    # Unified graph state
+    current_graph_path = reactive.Value(None)
+    graph_source_type = reactive.Value("none")  # "assembly", "upload", or "none"
     
     # Theme handling
     @reactive.Effect
@@ -257,26 +237,11 @@ def server(input, output, session):
         logger.info(f"Selection-related inputs: {selection_inputs}")
         logger.info(f"Graph-related inputs: {graph_inputs}")
         
-        # Debug: Check current values of click inputs and any selection inputs
+        # Debug: Log available inputs for troubleshooting
         try:
-            assembly_click = input.assembly_graph_click()
-            dot_click = input.dot_graph_click()
-            logger.info(f"Current assembly_graph_click value: {assembly_click}")
-            logger.info(f"Current dot_graph_click value: {dot_click}")
-            
-            # Check current values of dot_graph_click specifically
-            if 'dot_graph_click' in all_inputs:
-                logger.info(f"dot_graph_click is available - checking value...")
-                try:
-                    dot_click_value = input.dot_graph_click()
-                    logger.info(f"dot_graph_click current value: {dot_click_value}")
-                except Exception as dot_e:
-                    logger.info(f"Error accessing dot_graph_click: {dot_e}")
-                        
+            logger.info(f"Total available inputs: {len(all_inputs)}")
         except Exception as e:
             logger.info(f"Error in debug section: {e}")
-            import traceback
-            logger.debug(f"Full traceback: {traceback.format_exc()}")
     
     # Apply Selection button behavior is handled by the graph reactive events
     
@@ -1016,293 +981,196 @@ def server(input, output, session):
 
         return fig
 
-    @output
-    @render_widget
-    @reactive.event(input.use_weighted, input.draw_graph, input.assemble, input.app_theme, 
-                   input.separate_components, input.component_padding, input.min_component_size,
-                   input.layout_k, input.layout_iterations, input.layout_scale,
-                   input.weight_method, input.graph_type, input.apply_selection, clicked_nodes)
-    def assembly_graph():
+    # Handle assembly graph generation
+    @reactive.Effect
+    @reactive.event(input.generate_graph)
+    def generate_assembly_graph():
+        """Generate graph from assembly when button clicked"""
         if assembly_result() is None:
-            empty_fig = go.Figure(layout=current_template()['layout'])
-            empty_fig.update_layout(
-                    height=1000,
-                    autosize=True,
-                    annotations=[dict(
-                        text="No assembly graph available",
-                        xref="paper",
-                        yref="paper",
-                        x=0.5,
-                        y=0.5,
-                        showarrow=False,
-                        font=dict(color='#ffffff', size=14)
-                        )]
-                    )
-            return empty_fig
-
-        # Build path based on selected graph type and assembly mode
+            ui.notification_show("Please run assembly first", type="warning")
+            return
+        
+        # Build path based on selected graph type
         base_path = f"{Path(__file__).parent}/"
         graph_suffix = input.umi()
         graph_path = f"{base_path}{graph_suffix}__{input.graph_type()}.dot"
-
-        logger.debug(f"Looking for assembly graph at: {graph_path}")  
-
-        if not Path(graph_path).exists():
-            logger.warning(f"Assembly graph file not found: {graph_path}")
-            empty_fig = go.Figure(layout=current_template()['layout'])
-            empty_fig.update_layout(
-                    height=1000,
-                    autosize=True,
-                    annotations=[dict(
-                        text=f"Graph file not found: {graph_path}",
-                        xref="paper",
-                        yref="paper",
-                        x=0.5,
-                        y=0.5,
-                        showarrow=False,
-                        font=dict(color='#ffffff', size=14)
-                        )]
-                    )
-            return empty_fig        
-
-        path_nodes = None
-        if path_results() is not None and isinstance(path_results(), dict):
-            path_nodes = path_results().get('path_nodes')
-
-        # Parse selected nodes and sequences from text inputs (only if apply_to_assembly is enabled)
-        selected_nodes = None
-        selected_sequences = None
         
-        if input.apply_to_assembly():
-            # Start with clicked nodes
-            all_selected_nodes = set(clicked_nodes.get())
+        if Path(graph_path).exists():
+            current_graph_path.set(graph_path)
+            graph_source_type.set("assembly")
+            ui.notification_show(f"Loaded {input.graph_type()} graph", type="success", duration=2)
+        else:
+            ui.notification_show(f"Graph file not found: {graph_path}", type="error")
+
+    # Handle DOT file upload
+    @reactive.Effect
+    @reactive.event(input.dot_file)
+    def handle_dot_upload():
+        """Handle uploaded DOT file"""
+        if input.dot_file() is not None:
+            file_info = input.dot_file()
+            dot_file_path = file_info[0]["datapath"]
+            logger.info(f"DOT file uploaded: {dot_file_path}")
             
-            # Add nodes from text input
-            if input.selected_nodes() and input.selected_nodes().strip():
-                text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
-                all_selected_nodes.update(text_nodes)
-                logger.debug(f"Text input nodes for assembly graph: {text_nodes}")
+            # Set the radio button to upload mode
+            ui.update_radio_buttons("graph_source", selected="upload")
             
-            # Convert to list if we have any selected nodes
-            if all_selected_nodes:
-                selected_nodes = list(all_selected_nodes)
-                logger.debug(f"All selected nodes for assembly graph: {selected_nodes}")
-            
-            # Parse sequences
-            if input.selected_sequences() and input.selected_sequences().strip():
-                selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
-                logger.debug(f"Parsed selected sequences for assembly graph: {selected_sequences}")
+            current_graph_path.set(dot_file_path)
+            graph_source_type.set("upload")
+            ui.notification_show("DOT file loaded", type="success", duration=2)
+        else:
+            logger.info("DOT file cleared or None")
 
-        # Create graph visualization
-        dark_mode = input.app_theme() != "latte"  # Only latte is light mode
-        try:
-            fig = create_graph_plot(
-                    graph_path, 
-                    dark_mode=dark_mode,
-                    line_shape='linear',
-                    graph_type=input.graph_type(),
-                    path_nodes=path_nodes,
-                    weighted=input.use_weighted(),
-                    weight_method=input.weight_method(),
-                    separate_components=input.separate_components(),
-                    component_padding=input.component_padding(),
-                    min_component_size=input.min_component_size(),
-                    spring_args={
-                        'k':input.layout_k(),
-                        'iterations':input.layout_iterations(),
-                        'scale':input.layout_scale(),
-                        },
-                    selected_nodes=selected_nodes,
-                    selected_sequences=selected_sequences,
-                    debug=True
-                    )
-            
-            # Ensure we have a valid figure
-            if not isinstance(fig, go.Figure):
-                logger.error(f"create_graph_plot returned {type(fig)} instead of a Figure")
-                fig = go.Figure()
-                fig.update_layout(
-                        autosize=True,
-                        **current_template()['layout'],
-                        annotations=[dict(
-                            text=f"Error creating graph: Invalid return type {type(fig)}",
-                            xref="paper",
-                            yref="paper",
-                            x=0.5,
-                            y=0.5,
-                            showarrow=False,
-                            font=dict(color='#ffffff', size=14)
-                            )]
-                        )
-        except Exception as e:
-            logger.error(f"Error in create_graph_plot: {str(e)}")
-            fig = go.Figure()
-            fig.update_layout(
-                    autosize=True,
-                    **current_template()['layout'],
-                    annotations=[dict(
-                        text=f"Error creating graph: {str(e)}",
-                        xref="paper",
-                        yref="paper",
-                        x=0.5,
-                        y=0.5,
-                        showarrow=False,
-                        font=dict(color='#ffffff', size=14)
-                        )]
-                    )
-
-        # This block is now redundant as we handle None in the try/except block above
-        # Just make sure fig is not None in case something unexpected happens
-        if fig is None:
-            fig = go.Figure()
-            fig.update_layout(
-                    autosize=True,
-                    **current_template()['layout'],
-                    annotations=[dict(
-                        text="Error: graph creation returned None",
-                        xref="paper",
-                        yref="paper",
-                        x=0.5,
-                        y=0.5,
-                        showarrow=False,
-                        font=dict(color='#ffffff', size=14)
-                        )]
-                    )
-
-        # Add debug information to layout
-        fig.update_layout(
-                annotations=[
-                    dict(
-                        text=f"Graph: {graph_path}<br>",
-                        xref="paper",
-                        yref="paper",
-                        x=0.5,
-                        y=0,  # Position below the plot (-0.1 for some spacing)
-                        showarrow=False,
-                        font=dict(size=10, color='#ffffff'),
-                        xanchor='center',
-                        yanchor='top'
-                        )
-                    ],
-                margin=dict(b=60),  # Increase bottom margin to accommodate the text
-                autosize=True,
-                height=1000,
-                )
-
-        return fig
-
+    # Unified graph rendering function
     @output
     @render_widget
-    @reactive.event(input.dot_file, input.app_theme, input.dot_weighted, input.dot_weight_method, input.dot_separate_components, input.apply_selection, clicked_nodes)
-    def dot_graph():
-        logger.info("Rendering DOT graph widget")
-        if input.dot_file() is None:
-            # Return empty FigureWidget (not Figure)
+    @reactive.event(
+        current_graph_path, 
+        input.app_theme,
+        input.use_weighted,
+        input.weight_method,
+        input.separate_components,
+        input.component_padding,
+        input.min_component_size,
+        input.layout_k,
+        input.layout_iterations,
+        input.layout_scale,
+        input.selected_nodes,
+        input.selected_sequences,
+        clicked_nodes
+    )
+    def unified_graph():
+        """Render the unified graph widget"""
+        logger.info(f"Rendering unified graph - source: {graph_source_type.get()}, path: {current_graph_path.get()}")
+        
+        # Check if we have a graph to display
+        graph_path = current_graph_path.get()
+        if graph_path is None:
             empty_fig = go.FigureWidget(layout=current_template()['layout'])
             empty_fig.update_layout(
                 height=800,
                 autosize=True,
                 annotations=[dict(
-                    text="Upload a .dot file to view the graph",
-                    xref="paper",
-                    yref="paper",
-                    x=0.5,
-                    y=0.5,
+                    text="Generate a graph from assembly or upload a DOT file",
+                    xref="paper", yref="paper",
+                    x=0.5, y=0.5,
                     showarrow=False,
-                    font=dict(color='#ffffff', size=16)
+                    font=dict(color='#888', size=16)
                 )]
             )
             return empty_fig
-
+        
         try:
-            file_info = input.dot_file()
-            dot_file_path = file_info[0]["datapath"]
-            
-            # Parse selected nodes and sequences from text inputs (only if apply_to_dot is enabled)
+            # Parse selected nodes and sequences
             selected_nodes = None
             selected_sequences = None
             
-            if input.apply_to_dot():
-                # Start with clicked nodes
-                all_selected_nodes = set(clicked_nodes.get())
-                
-                # Add nodes from text input
-                if input.selected_nodes() and input.selected_nodes().strip():
-                    text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
-                    all_selected_nodes.update(text_nodes)
-                    logger.debug(f"Text input nodes for DOT viewer: {text_nodes}")
-                
-                # Convert to list if we have any selected nodes
-                if all_selected_nodes:
-                    selected_nodes = list(all_selected_nodes)
-                    logger.debug(f"All selected nodes for DOT viewer: {selected_nodes}")
-                
-                # Parse sequences
-                if input.selected_sequences() and input.selected_sequences().strip():
-                    selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
-                    logger.debug(f"Parsed selected sequences for DOT viewer: {selected_sequences}")
+            # Get all selected nodes (from clicks and text input)
+            all_selected_nodes = set(clicked_nodes.get())
             
-            # Create the figure using create_graph_plot
+            if input.selected_nodes() and input.selected_nodes().strip():
+                text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+                all_selected_nodes.update(text_nodes)
+            
+            if all_selected_nodes:
+                selected_nodes = list(all_selected_nodes)
+                logger.debug(f"Selected nodes: {selected_nodes}")
+            
+            if input.selected_sequences() and input.selected_sequences().strip():
+                selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
+            
+            # Determine path nodes if this is from assembly
+            path_nodes = None
+            if graph_source_type.get() == "assembly" and path_results() is not None:
+                path_data = path_results()
+                if isinstance(path_data, list) and len(path_data) > 0:
+                    path_nodes = set()
+                    for path in path_data:
+                        if 'path' in path:
+                            path_nodes.update(path['path'])
+            
+            # Check if file exists
+            if not Path(graph_path).exists():
+                logger.warning(f"Graph file not found: {graph_path}")
+                error_fig = go.FigureWidget(layout=current_template()['layout'])
+                error_fig.update_layout(
+                    height=800,
+                    annotations=[dict(
+                        text=f"Graph file not found: {graph_path}",
+                        xref="paper", yref="paper",
+                        x=0.5, y=0.5,
+                        showarrow=False,
+                        font=dict(color='#ff0000', size=14)
+                    )]
+                )
+                return error_fig
+            
+            logger.info(f"Creating graph from file: {graph_path}")
+            
+            # Create the graph plot  
             fig = create_graph_plot(
-                dot_file_path, 
+                graph_path,
                 dark_mode=(input.app_theme() != "latte"),
-                weighted=input.dot_weighted(),
-                weight_method=input.dot_weight_method(),
-                separate_components=input.dot_separate_components(),
+                weighted=input.use_weighted(),
+                weight_method=input.weight_method(),
+                separate_components=input.separate_components(),
                 component_padding=input.component_padding(),
                 min_component_size=input.min_component_size(),
                 selected_nodes=selected_nodes,
                 selected_sequences=selected_sequences,
+                path_nodes=path_nodes,
                 spring_args={
-                    'k': input.layout_k(), 
-                    'iterations': input.layout_iterations(), 
+                    'k': input.layout_k(),
+                    'iterations': input.layout_iterations(),
                     'scale': input.layout_scale()
                 }
             )
             
-            # CRITICAL: Convert to FigureWidget for interactivity
+            # Convert to FigureWidget for interactivity
             fig_widget = go.FigureWidget(fig)
             
-            # Add click handler directly to the widget
-            def on_click(trace, points, selector):
+            # Add click handler
+            def on_node_click(trace, points, selector):
                 if not points.point_inds:
                     return
-                    
-                # Get the clicked point index
+                
                 point_ind = points.point_inds[0]
                 
-                # Get node ID from customdata
                 if hasattr(trace, 'customdata') and trace.customdata is not None:
                     node_id = str(trace.customdata[point_ind])
-                    logger.info(f"DOT widget clicked: {node_id}")
+                    logger.info(f"Graph node clicked: {node_id}")
                     
-                    # Update selection
+                    # Toggle selection
                     current_selection = clicked_nodes.get().copy()
                     
                     if node_id in current_selection:
                         current_selection.discard(node_id)
-                        ui.notification_show(f"Deselected node: {node_id}", type="message", duration=2)
+                        ui.notification_show(f"Deselected: {node_id}", type="message", duration=1)
                     else:
                         current_selection.add(node_id)
-                        ui.notification_show(f"Selected node: {node_id}", type="message", duration=2)
+                        ui.notification_show(f"Selected: {node_id}", type="message", duration=1)
                     
-                    # Update reactive state
                     clicked_nodes.set(current_selection)
                     
                     # Update text input
-                    ui.update_text("selected_nodes", 
-                                  value=", ".join(sorted(current_selection)) if current_selection else "")
+                    if current_selection:
+                        ui.update_text("selected_nodes", value=", ".join(sorted(current_selection)))
+                    else:
+                        ui.update_text("selected_nodes", value="")
             
-            # Attach click handler to the nodes trace
-            for i, trace in enumerate(fig_widget.data):
+            # Attach click handler to nodes trace
+            for trace in fig_widget.data:
                 if hasattr(trace, 'name') and trace.name == 'nodes':
-                    trace.on_click(on_click)
+                    trace.on_click(on_node_click)
                     break
             
             return fig_widget
             
         except Exception as e:
-            logger.error(f"Error creating DOT graph: {e}")
+            logger.error(f"Error creating graph: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
             error_fig = go.FigureWidget(layout=current_template()['layout'])
             error_fig.update_layout(
                 height=800,
