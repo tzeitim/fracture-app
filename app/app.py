@@ -10,6 +10,10 @@ import matplotlib
 import pandas as pd
 import logging
 
+app_dir = Path(__file__).parent
+www_dir = app_dir / "www"
+os.environ["SHINY_MOUNT_DIRECTORIES"] = f"/:{www_dir}"
+
 # Initialize matplotlib
 matplotlib.use("agg")
 
@@ -101,7 +105,9 @@ app_ui = ui.page_fluid(
                     ui.column(12,
                         ui.h4("Graph Visualization"),
                         ui.panel_well(
-                            ui.div(output_widget("unified_graph"), style="min-height: 800px; height: auto; width: 100%")
+                            #                            ui.div(output_widget("unified_graph"), style="min-height: 800px; height: auto; width: 100%")
+                            ui.output_ui("graph_display")
+
                         ),
                         ui.hr(),
                         ui.output_text("selection_count"),
@@ -1063,6 +1069,56 @@ def server(input, output, session):
                 ui.notification_show(f"Error copying uploaded file: {str(e)}", type="error")
         else:
             logger.info("DOT file cleared or None")
+
+        ####
+    @output
+    @render.ui
+    def graph_display():
+        """Display either the static image or the interactive widget based on toggle"""
+        if input.use_static_image():
+            # If using static image
+            if current_static_image.get() is None:
+                return ui.div(
+                    "Static image not yet generated. Change any graph parameter to generate it.",
+                    style="height: 800px; display: flex; align-items: center; justify-content: center; font-style: italic; color: #888;"
+                )
+            else:
+                # Read the image file and convert to a data URL
+                try:
+                    import base64
+                    image_path = current_static_image.get()
+                    
+                    if not Path(image_path).exists():
+                        logger.warning(f"Image file not found: {image_path}")
+                        return ui.div(
+                            f"Image file not found: {Path(image_path).name}",
+                            style="height: 800px; display: flex; align-items: center; justify-content: center; color: red;"
+                        )
+                    
+                    with open(image_path, "rb") as f:
+                        image_data = f.read()
+                    
+                    # Convert to a data URL
+                    encoded = base64.b64encode(image_data).decode("utf-8")
+                    data_url = f"data:image/png;base64,{encoded}"
+                    
+                    return ui.div(
+                        ui.tags.img(src=data_url, style="width:100%; max-height:800px; object-fit:contain;"),
+                        style="display: flex; flex-direction: column; align-items: center; gap: 10px;"
+                    )
+                except Exception as e:
+                    logger.error(f"Error creating data URL: {str(e)}")
+                    import traceback
+                    logger.debug(f"Data URL error traceback: {traceback.format_exc()}")
+                    return ui.div(
+                        f"Error loading image: {str(e)}",
+                        style="height: 800px; display: flex; align-items: center; justify-content: center; color: red;"
+                    )
+        else:
+            # Using interactive widget
+            return ui.div(output_widget("unified_graph"), style="height: 800px;")
+        ####
+
     @reactive.Effect
     @reactive.event(
         current_graph_path, 
@@ -1078,70 +1134,237 @@ def server(input, output, session):
         input.selected_nodes,
         input.selected_sequences,
         clicked_nodes,
-        input.use_static_image  # Add this dependency
+        input.use_static_image
     )
     def generate_static_graph():
-        """Generate a static PNG image of the graph when parameters change"""
-        # Only generate if static image option is enabled
-        if not input.use_static_image():
+        """Generate a static PNG image of the graph preserving NetworkX layout"""
+        if not input.use_static_image() or current_graph_path.get() is None:
             return
             
-        logger.info("Generating static graph image")
+        logger.info("Generating static graph image preserving node positions")
         graph_path = current_graph_path.get()
+
         if graph_path is None:
             logger.warning("No graph path available for static image generation")
             return
             
         try:
-            # Similar logic to unified_graph for creating the figure
-            selected_nodes = None
-            selected_sequences = None
+            import networkx as nx
+            import matplotlib.pyplot as plt
+            import matplotlib as mpl
+            from modules.visualization import create_weighted_graph, extract_coverage
             
-            # Get all selected nodes (from clicks and text input)
-            all_selected_nodes = set(clicked_nodes.get())
+            # Set matplotlib to use agg backend (non-interactive)
+            mpl.use('agg')
             
-            if input.selected_nodes() and input.selected_nodes().strip():
-                text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
-                all_selected_nodes.update(text_nodes)
+            # Read the DOT file
+            graph = nx.drawing.nx_pydot.read_dot(graph_path)
+            if len(graph.nodes()) == 0:
+                logger.warning("Empty graph - no nodes found")
+                return
             
-            if all_selected_nodes:
-                selected_nodes = list(all_selected_nodes)
+            # Apply weighting if needed
+            if input.use_weighted():
+                graph = create_weighted_graph(graph, input.weight_method())
             
-            if input.selected_sequences() and input.selected_sequences().strip():
-                selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
-            
-            # Determine path nodes if this is from assembly
-            path_nodes = None
-            if graph_source_type.get() == "assembly" and path_results() is not None:
-                path_data = path_results()
-                if isinstance(path_data, list) and len(path_data) > 0:
-                    path_nodes = set()
-                    for path in path_data:
-                        if 'path' in path:
-                            path_nodes.update(path['path'])
-            
-            # Create the graph plot
-            fig = create_graph_plot(
-                graph_path,
-                dark_mode=(input.app_theme() != "latte"),
-                weighted=input.use_weighted(),
-                weight_method=input.weight_method(),
-                separate_components=input.separate_components(),
-                component_padding=input.component_padding(),
-                min_component_size=input.min_component_size(),
-                selected_nodes=selected_nodes,
-                selected_sequences=selected_sequences,
-                path_nodes=path_nodes,
-                spring_args={
+            # Calculate node positions - using the same logic as in your Plotly visualization
+            if input.separate_components():
+                # Identify connected components for separate layout
+                components = list(nx.connected_components(graph.to_undirected()))
+                
+                # Filter out components smaller than min_component_size
+                filtered_components = [comp for comp in components if len(comp) >= min_component_size]
+                
+                # Sort components by size (largest first)
+                filtered_components.sort(key=len, reverse=True)
+                
+                # Calculate layout for each component and place in a grid
+                pos = {}
+                
+                # First pass - calculate layouts and store info
+                component_info = []
+                for component in filtered_components:
+                    # Create subgraph for this component
+                    subgraph = graph.subgraph(component)
+                    
+                    # Calculate layout for this component - same as in your visualization code
+                    spring_args = {
+                        'k': input.layout_k(),
+                        'iterations': input.layout_iterations(),
+                        'scale': input.layout_scale()
+                    }
+                    
+                    if input.use_weighted():
+                        component_pos = nx.spring_layout(subgraph, weight='weight', **spring_args, seed=42)
+                    else:
+                        component_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
+                    
+                    # Find bounding box
+                    min_x = min(p[0] for p in component_pos.values()) if component_pos else 0
+                    max_x = max(p[0] for p in component_pos.values()) if component_pos else 0
+                    min_y = min(p[1] for p in component_pos.values()) if component_pos else 0
+                    max_y = max(p[1] for p in component_pos.values()) if component_pos else 0
+                    width = max_x - min_x
+                    height = max_y - min_y
+                    
+                    # Use the same scale factor calculation
+                    import numpy as np
+                    scale_factor = np.sqrt(len(component)) / 2.0
+                    
+                    component_info.append({
+                        'component': component,
+                        'pos': component_pos,
+                        'width': width * scale_factor,
+                        'height': height * scale_factor,
+                        'scale_factor': scale_factor,
+                        'size': len(component)
+                    })
+                
+                # If no components meet the size requirement, revert to standard layout
+                if not filtered_components:
+                    if input.use_weighted():
+                        pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+                    else:
+                        pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+                else:
+                    # Second pass - arrange components in a grid, same as in your visualization code
+                    current_x, current_y = 0, 0
+                    max_height_in_row = 0
+                    row_components = 0
+                    padding = input.component_padding()
+                    max_components_per_row = 3  # Adjust based on your needs
+                    
+                    for info in component_info:
+                        # If we've reached the max components per row, move to next row
+                        if row_components >= max_components_per_row:
+                            current_x = 0
+                            current_y += max_height_in_row + padding
+                            max_height_in_row = 0
+                            row_components = 0
+                        
+                        # Position this component
+                        for node, node_pos in info['pos'].items():
+                            # Scale and shift the position
+                            pos[node] = (
+                                node_pos[0] * info['scale_factor'] + current_x,
+                                node_pos[1] * info['scale_factor'] + current_y
+                            )
+                        
+                        # Update position for next component
+                        current_x += info['width'] + padding
+                        max_height_in_row = max(max_height_in_row, info['height'])
+                        row_components += 1
+            else:
+                # Use the same layout calculation as in your visualization code
+                spring_args = {
                     'k': input.layout_k(),
                     'iterations': input.layout_iterations(),
                     'scale': input.layout_scale()
                 }
+                ###
+                if len(graph.nodes()) > 1000:  # For very large graphs
+                    # Use graphviz's sfdp algorithm which is much faster
+                    import pygraphviz as pgv
+                    G = pgv.AGraph(strict=False, directed=True)
+                    
+                    # Add nodes and edges
+                    for node in graph.nodes():
+                        G.add_node(node)
+                    for u, v in graph.edges():
+                        G.add_edge(u, v)
+                    
+                    # Use sfdp layout
+                    G.layout(prog='sfdp')
+                    
+                    # Extract positions
+                    pos = {}
+                    for node in graph.nodes():
+                        if node in G:
+                            pos[node] = tuple(map(float, G.get_node(node).attr['pos'].split(',')))
+                else:
+                    # Use NetworkX layouts for smaller graphs
+                    if input.use_weighted():
+                        pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+                    else:
+                        pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+
+
+            # Create figure with appropriate styling
+            plt.figure(figsize=(12, 8), dpi=150)
+            
+            # Set theme colors
+            dark_mode = (input.app_theme() != "latte")
+            bg_color = '#2d3339' if dark_mode else '#ffffff'
+            edge_color = '#888888' if dark_mode else '#555555'
+            node_color = '#375a7f' if dark_mode else '#3498db'
+            text_color = '#ffffff' if dark_mode else '#000000'
+            
+            # Set background color
+            plt.gca().set_facecolor(bg_color)
+            plt.gcf().set_facecolor(bg_color)
+            
+            # Extract node properties for coloring
+            colors = []
+            sizes = []
+            
+            # Get selected nodes
+            selected_nodes = []
+            if input.selected_nodes() and input.selected_nodes().strip():
+                selected_nodes.extend([node.strip() for node in input.selected_nodes().split(',') if node.strip()])
+            selected_nodes.extend(clicked_nodes.get())
+            selected_nodes = list(set(selected_nodes))
+            
+            # Get coverages for size scaling
+            coverages = extract_coverage(graph)
+            min_coverage = min(coverages.values()) if coverages else 1
+            max_coverage = max(coverages.values()) if coverages else 1
+            min_size = 100
+            max_size = 600
+            
+            # Get colors and sizes for each node
+            for node in graph.nodes():
+                if node in selected_nodes:
+                    colors.append('#e74c3c')  # Red for selected
+                else:
+                    colors.append(node_color)
+                
+                # Scale node size based on coverage
+                if node in coverages:
+                    size_factor = (coverages[node] - min_coverage) / max(1, max_coverage - min_coverage)
+                    sizes.append(min_size + size_factor * (max_size - min_size))
+                else:
+                    sizes.append(min_size)
+            
+            # Draw edges
+            nx.draw_networkx_edges(
+                graph, pos, 
+                alpha=0.7,
+                edge_color=edge_color,
+                arrows=True,
+                arrowsize=10
             )
+            
+            # Draw nodes
+            nx.draw_networkx_nodes(
+                graph, pos,
+                node_color=colors,
+                node_size=sizes,
+                alpha=0.9
+            )
+            
+            # Draw labels
+            nx.draw_networkx_labels(
+                graph, pos,
+                font_color=text_color,
+                font_size=8
+            )
+            
+            plt.title("Assembly Graph", color=text_color, fontsize=16)
+            plt.axis('off')
             
             # Generate file path for the static image
             base_dir = Path(__file__).parent
-            static_dir = base_dir / "static"
+            static_dir = base_dir / "www"
             static_dir.mkdir(exist_ok=True)
             
             # Use timestamp to ensure unique filenames
@@ -1153,7 +1376,10 @@ def server(input, output, session):
             image_path = static_dir / image_filename
             
             # Save the figure as a PNG
-            fig.write_image(str(image_path), width=1200, height=800)
+            plt.tight_layout()
+            plt.savefig(str(image_path), dpi=150, bbox_inches='tight')
+            plt.close()  # Close the figure to free memory
+            
             logger.info(f"Saved static graph image to {image_path}")
             
             # Store the current static image path in a reactive value
@@ -1163,7 +1389,7 @@ def server(input, output, session):
             logger.error(f"Error generating static graph image: {str(e)}")
             import traceback
             logger.debug(f"Static graph traceback: {traceback.format_exc()}")
-
+        ###
     # Unified graph rendering function
     @output
     @render_widget
@@ -1180,11 +1406,26 @@ def server(input, output, session):
         input.layout_scale,
         input.selected_nodes,
         input.selected_sequences,
-        clicked_nodes
+        clicked_nodes,
+        input.use_static_image  # Add this dependency
     )
     def unified_graph():
         """Render the unified graph widget"""
-        logger.info(f"Rendering unified graph - source: {graph_source_type.get()}, path: {current_graph_path.get()}")
+
+        if input.use_static_image():
+            # Return an empty widget
+            empty_fig = go.FigureWidget()
+            empty_fig.update_layout(
+                height=10,  # Minimal height to minimize space
+                autosize=True,
+                showlegend=False,
+                margin=dict(l=0, r=0, t=0, b=0),
+                paper_bgcolor='rgba(0,0,0,0)',  # Transparent background
+                plot_bgcolor='rgba(0,0,0,0)'    # Transparent plot area
+            )
+            return empty_fig
+        
+        logger.info(f"Rendering interactive graph - source: {graph_source_type.get()}, path: {current_graph_path.get()}")
         
         # Check if we have a graph to display
         graph_path = current_graph_path.get()

@@ -8,6 +8,7 @@ dependencies:
  - nb_conda_kernels
  - pytest
  - pip
+  - pygraphviz
  - pip:
    - pytest
    - anndata
@@ -22,3 +23,4 @@ dependencies:
    - shinywidgets>=0.4.2
    - networkx
    - metacells
+   - kaleido
