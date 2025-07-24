@@ -145,6 +145,20 @@ def create_graph_source_controls():
             },
             selected="assembly"
         ),
+        ui.input_select(
+            "layout_algorithm",
+            "Layout Algorithm:",
+            choices={
+                "fruchterman_reingold": "Fruchterman-Reingold (Balanced - Recommended)",
+                "spectral": "Spectral (Fast for large graphs)",
+                "random": "Random (Fastest)",
+                "circular": "Circular (Very fast)",
+                "shell": "Shell (Fast, concentric)",
+                "spring": "Spring (High quality, slow)",
+                "kamada_kawai": "Kamada-Kawai (Best quality, slowest)"
+            },
+            selected="fruchterman_reingold"
+        ),
         
         # Show assembly controls when "assembly" is selected
         ui.panel_conditional(
@@ -174,6 +188,11 @@ def create_graph_source_controls():
                 "Choose .dot file:",
                 accept=[".dot"],
                 multiple=False
+            ),
+            ui.input_action_button(
+                "create_graph",
+                "Create Graph",
+                class_="btn-primary"
             )
         ),
     )

@@ -1333,6 +1333,34 @@ def server(input, output, session):
         else:
             ui.notification_show("Please select a DOT file first", type="warning", duration=2)
 
+    # Download handler for static graph PNG
+    @render.download(
+        filename=lambda: f"fracture_graph_{input.layout_algorithm()}_{int(__import__('time').time())}.png"
+    )
+    def download_static_graph():
+        """Download the current static graph image"""
+        image_path = current_static_image.get()
+        if image_path and Path(image_path).exists():
+            logger.info(f"Downloading static graph: {image_path}")
+            # Return the file path directly - Shiny will handle the rest
+            return str(image_path)
+        else:
+            logger.warning("No static graph image available for download")
+            # Return empty bytes if no file available
+            return b""
+
+    # Update download button state based on static image availability
+    @reactive.Effect
+    def update_download_button():
+        """Enable/disable download button based on static image availability"""
+        image_path = current_static_image.get()
+        if image_path and Path(image_path).exists():
+            # Enable button by removing disabled attribute
+            ui.update_action_button("download_static_graph", disabled=False)
+        else:
+            # Disable button when no image is available
+            ui.update_action_button("download_static_graph", disabled=True)
+
     ####
     @output
     @render.ui
@@ -1394,9 +1422,7 @@ def server(input, output, session):
         input.layout_k,
         input.layout_iterations,
         input.layout_scale,
-        input.selected_nodes,
-        input.selected_sequences,
-        clicked_nodes,
+        input.layout_algorithm,
         input.use_static_image
     )
     def generate_static_graph():
@@ -1850,5 +1876,12 @@ def get_central_graph_path():
 
 
 
+
+# Add periodic heartbeat to prevent connection timeout
+@reactive.Effect
+def heartbeat():
+    """Send periodic heartbeat to keep connection alive"""
+    reactive.invalidate_later(60)  # Trigger every 60 seconds
+    # This effect runs silently in background to keep session active
 
 app = App(app_ui, server)

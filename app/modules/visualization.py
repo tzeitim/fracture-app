@@ -373,10 +373,35 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
         )
     )
 
+def get_layout_algorithm(algorithm_name, graph, spring_args, weighted=False):
+    """Get the appropriate layout function based on algorithm name"""
+    import networkx as nx
+    
+    if algorithm_name == "fruchterman_reingold":
+        return nx.fruchterman_reingold_layout(graph, k=spring_args.get('k'), iterations=spring_args.get('iterations', 50), seed=42)
+    elif algorithm_name == "spectral":
+        return nx.spectral_layout(graph, scale=spring_args.get('scale', 2.0))
+    elif algorithm_name == "random":
+        return nx.random_layout(graph, seed=42)
+    elif algorithm_name == "circular":
+        return nx.circular_layout(graph, scale=spring_args.get('scale', 2.0))
+    elif algorithm_name == "shell":
+        return nx.shell_layout(graph, scale=spring_args.get('scale', 2.0))
+    elif algorithm_name == "spring":
+        if weighted:
+            return nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+        else:
+            return nx.spring_layout(graph, **spring_args, seed=42)
+    elif algorithm_name == "kamada_kawai":
+        return nx.kamada_kawai_layout(graph.to_undirected(), scale=spring_args.get('scale', 2.0))
+    else:
+        # Default fallback
+        return nx.fruchterman_reingold_layout(graph, k=spring_args.get('k'), iterations=spring_args.get('iterations', 50), seed=42)
+
 def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', 
                       debug=False, path_nodes=None, weighted=False, weight_method='nlog', 
                       separate_components=False, component_padding=3.0, min_component_size=3, spring_args=None,
-                      selected_nodes=None, selected_sequences=None, precalculated_positions=None):
+                      selected_nodes=None, selected_sequences=None, precalculated_positions=None, layout_algorithm="fruchterman_reingold"):
     """Create an interactive plot of the assembly graph.
     
     Args:
@@ -433,11 +458,8 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 # Create subgraph for this component
                 subgraph = graph.subgraph(component)
                 
-                # Calculate layout for this component
-                if weighted:
-                    component_pos = nx.spring_layout(subgraph, weight='weight', **spring_args, seed=42)
-                else:
-                    component_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
+                # Calculate layout for this component using selected algorithm
+                component_pos = get_layout_algorithm(layout_algorithm, subgraph, spring_args, weighted=weighted)
                 
                 # Find bounding box and scale factor based on component size
                 min_x = min(p[0] for p in component_pos.values()) if component_pos else 0
@@ -461,12 +483,9 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                     'size': len(component)
                 })
             
-            # If no components meet the size requirement, revert to standard layout
+            # If no components meet the size requirement, use selected algorithm for full graph
             if not filtered_components:
-                if weighted:
-                    pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
-                else:
-                    pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+                pos = get_layout_algorithm(layout_algorithm, graph, spring_args, weighted=weighted)
             else:
                 # Second pass - arrange components in a grid, starting with largest component at top left
                 current_x, current_y = 0, 0
@@ -517,12 +536,8 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                     # Move to the next row
                     current_y += max_height_in_row + component_padding
         else:
-            # Use standard layout for the entire graph
-            if weighted:
-                pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
-            else:
-                # Calculate layout
-                pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+            # Use selected algorithm for the entire graph
+            pos = get_layout_algorithm(layout_algorithm, graph, spring_args, weighted=weighted)
     
     # Extract node information
     node_x, node_y = [], []

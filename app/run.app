@@ -58,7 +58,20 @@ if __name__ == "__main__":
             logger.info(f"🌐 Default URL: http://localhost:{port}")
             logger.warning(f"⚠️  Could not determine hostname/IP: {e}")
         
-        run_app('app.py', host="0.0.0.0", port=port)
+        # Import app directly and run with uvicorn for timeout control
+        from app import app
+        import uvicorn
+        
+        # Configure longer timeouts to prevent idle disconnections
+        uvicorn.run(
+            app,
+            host="0.0.0.0", 
+            port=port,
+            timeout_keep_alive=300,  # 5 minutes keep-alive
+            timeout_graceful_shutdown=30,
+            ws_ping_interval=30,  # WebSocket ping every 30 seconds
+            ws_ping_timeout=10    # WebSocket ping timeout
+        )
     except Exception as e:
         logger.error(f"Error launching app: {e}")
         sys.exit(1)
