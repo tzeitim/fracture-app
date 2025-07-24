@@ -1,0 +1,26 @@
+name: fracture-app
+channels:
+ - conda-forge
+dependencies:
+ - python==3.10
+ - ipython
+ - ipykernel
+ - nb_conda_kernels
+ - pytest
+ - pip
+  - pygraphviz
+ - pip:
+   - pytest
+   - anndata
+   - graphviz>=0.20.3
+   - ogtk>=0.1.5
+   - plotly>=5.24.1
+   - polars>=1.27.0
+   - pydot>=3.0.4
+   - rogtk>=0.1.5
+   - shiny
+   - shinyswatch>=0.8.0
+   - shinywidgets>=0.4.2
+   - networkx
+   - metacells
+   - kaleido
