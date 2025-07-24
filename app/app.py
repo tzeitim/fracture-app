@@ -192,6 +192,86 @@ def server(input, output, session):
     
     # Node selection state management
     clicked_nodes = reactive.Value(set())  # Store clicked node IDs
+    current_fig_widget = reactive.Value(None)  # Store current FigureWidget instance
+    
+    def update_node_selection_colors(fig_widget, selected_nodes, dark_mode):
+        """Update node colors directly on existing FigureWidget without full re-render"""
+        if fig_widget is None:
+            return False
+            
+        # Find the nodes trace
+        nodes_trace_idx = None
+        for i, trace in enumerate(fig_widget.data):
+            if hasattr(trace, 'name') and trace.name == 'nodes':
+                nodes_trace_idx = i
+                break
+        
+        if nodes_trace_idx is None:
+            return False
+        
+        nodes_trace = fig_widget.data[nodes_trace_idx]
+        if not hasattr(nodes_trace, 'customdata') or nodes_trace.customdata is None:
+            return False
+        
+        # Create new color arrays
+        new_colors = []
+        new_line_colors = []
+        new_line_widths = []
+        
+        for i, node_id in enumerate(nodes_trace.customdata):
+            node_id_str = str(node_id)
+            if selected_nodes and node_id_str in selected_nodes:
+                # Selected node styling
+                new_colors.append('rgba(255, 0, 0, 0.8)')
+                new_line_colors.append('#ff0000')
+                new_line_widths.append(4)
+            else:
+                # Default node styling - preserve original or use default
+                if hasattr(nodes_trace.marker, 'color') and i < len(nodes_trace.marker.color):
+                    original_color = nodes_trace.marker.color[i]
+                    # If it was previously selected (red), revert to default
+                    if 'rgba(255, 0, 0' in str(original_color):
+                        new_colors.append('rgba(0, 0, 0, 0)' if not dark_mode else 'rgba(255, 255, 255, 0)')
+                    else:
+                        new_colors.append(original_color)
+                else:
+                    new_colors.append('rgba(0, 0, 0, 0)' if not dark_mode else 'rgba(255, 255, 255, 0)')
+                
+                new_line_colors.append('#888' if not dark_mode else '#ccc')
+                new_line_widths.append(1)
+        
+        # Update the trace properties directly
+        with fig_widget.batch_update():
+            fig_widget.data[nodes_trace_idx].marker.color = new_colors
+            fig_widget.data[nodes_trace_idx].marker.line.color = new_line_colors
+            fig_widget.data[nodes_trace_idx].marker.line.width = new_line_widths
+        
+        return True
+    
+    def get_layout_algorithm(algorithm_name, graph, spring_args, weighted=False):
+        """Get the appropriate layout function based on algorithm name"""
+        import networkx as nx
+        
+        if algorithm_name == "fruchterman_reingold":
+            return nx.fruchterman_reingold_layout(graph, k=spring_args.get('k'), iterations=spring_args.get('iterations', 50), seed=42)
+        elif algorithm_name == "spectral":
+            return nx.spectral_layout(graph, scale=spring_args.get('scale', 2.0))
+        elif algorithm_name == "random":
+            return nx.random_layout(graph, seed=42)
+        elif algorithm_name == "circular":
+            return nx.circular_layout(graph, scale=spring_args.get('scale', 2.0))
+        elif algorithm_name == "shell":
+            return nx.shell_layout(graph, scale=spring_args.get('scale', 2.0))
+        elif algorithm_name == "spring":
+            if weighted:
+                return nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+            else:
+                return nx.spring_layout(graph, **spring_args, seed=42)
+        elif algorithm_name == "kamada_kawai":
+            return nx.kamada_kawai_layout(graph.to_undirected(), scale=spring_args.get('scale', 2.0))
+        else:
+            # Default fallback
+            return nx.fruchterman_reingold_layout(graph, k=spring_args.get('k'), iterations=spring_args.get('iterations', 50), seed=42)
     
     # Unified graph state
     current_graph_path = reactive.Value(None)
@@ -262,10 +342,13 @@ def server(input, output, session):
                         'scale': input.layout_scale()
                     }
                     
-                    if input.use_weighted():
-                        component_pos = nx.spring_layout(subgraph, weight='weight', **spring_args, seed=42)
-                    else:
-                        component_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
+                    # Use selected algorithm for component layout
+                    component_pos = get_layout_algorithm(
+                        input.layout_algorithm(), 
+                        subgraph, 
+                        spring_args, 
+                        weighted=input.use_weighted()
+                    )
                     
                     # Find bounding box
                     min_x = min(p[0] for p in component_pos.values()) if component_pos else 0
@@ -290,10 +373,13 @@ def server(input, output, session):
                 
                 # If no components meet the size requirement, revert to standard layout
                 if not filtered_components:
-                    if input.use_weighted():
-                        pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
-                    else:
-                        pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+                    # Use selected algorithm for full graph when no components meet size requirement
+                    pos = get_layout_algorithm(
+                        input.layout_algorithm(), 
+                        graph, 
+                        spring_args, 
+                        weighted=input.use_weighted()
+                    )
                 else:
                     # Second pass - arrange components in a grid, same as in your visualization code
                     current_x, current_y = 0, 0
@@ -326,19 +412,14 @@ def server(input, output, session):
                 # (Similar to your existing code)
                 # ...
             else:
-                # Choose layout algorithm based on graph size
-                if node_count > 5000:
-                    logger.info("Using simple circular layout for very large graph")
-                    pos = nx.circular_layout(graph)
-                elif node_count > 1000:
-                    logger.info("Using spectral layout for large graph")
-                    pos = nx.spectral_layout(graph)
-                elif use_weighted:
-                    logger.info("Using spring layout with weights")
-                    pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
-                else:
-                    logger.info("Using kamada_kawai layout")
-                    pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=spring_args['scale'])
+                # Use selected algorithm regardless of graph size
+                logger.info(f"Using {input.layout_algorithm()} layout algorithm for {node_count} nodes")
+                pos = get_layout_algorithm(
+                    input.layout_algorithm(), 
+                    graph, 
+                    spring_args, 
+                    weighted=use_weighted
+                )
         
         # Cache the calculated positions
         cached_positions.set(pos)
@@ -1209,17 +1290,33 @@ def server(input, output, session):
         else:
             ui.notification_show(f"Graph file not found: {graph_path}", type="error")
 
-    # Handle DOT file upload
+    # Store uploaded file info for later processing
+    uploaded_dot_info = reactive.Value(None)
+    
+    # Handle DOT file selection (not automatic processing)
     @reactive.Effect
     @reactive.event(input.dot_file)
-    def handle_dot_upload():
-        """Handle uploaded DOT file"""
+    def handle_dot_file_selection():
+        """Store uploaded DOT file info for processing when Create Graph is clicked"""
         if input.dot_file() is not None:
             file_info = input.dot_file()
+            uploaded_dot_info.set(file_info)
+            logger.info(f"DOT file selected: {file_info[0]['name']}")
+            ui.notification_show("DOT file selected. Click 'Create Graph' to process.", type="message", duration=3)
+        else:
+            uploaded_dot_info.set(None)
+    
+    # Handle Create Graph button for uploads
+    @reactive.Effect  
+    @reactive.event(input.create_graph)
+    def handle_create_graph_from_upload():
+        """Process uploaded DOT file when Create Graph button is clicked"""
+        file_info = uploaded_dot_info.get()
+        if file_info is not None:
             uploaded_dot_path = file_info[0]["datapath"]
-            logger.info(f"DOT file uploaded: {uploaded_dot_path}")
+            logger.info(f"Processing DOT file: {uploaded_dot_path}")
             
-            # Copy to central location instead of just setting the path
+            # Copy to central location
             central_path = get_central_graph_path()
             try:
                 import shutil
@@ -1230,13 +1327,13 @@ def server(input, output, session):
                 
                 current_graph_path.set(str(central_path))
                 graph_source_type.set("upload")
-                ui.notification_show("DOT file loaded", type="success", duration=2)
+                ui.notification_show("Graph created from DOT file", type="success", duration=2)
             except Exception as e:
-                ui.notification_show(f"Error copying uploaded file: {str(e)}", type="error")
+                ui.notification_show(f"Error processing DOT file: {str(e)}", type="error")
         else:
-            logger.info("DOT file cleared or None")
+            ui.notification_show("Please select a DOT file first", type="warning", duration=2)
 
-        ####
+    ####
     @output
     @render.ui
     def graph_display():
@@ -1360,10 +1457,13 @@ def server(input, output, session):
                         'scale': input.layout_scale()
                     }
                     
-                    if input.use_weighted():
-                        component_pos = nx.spring_layout(subgraph, weight='weight', **spring_args, seed=42)
-                    else:
-                        component_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
+                    # Use selected algorithm for component layout
+                    component_pos = get_layout_algorithm(
+                        input.layout_algorithm(), 
+                        subgraph, 
+                        spring_args, 
+                        weighted=input.use_weighted()
+                    )
                     
                     # Find bounding box
                     min_x = min(p[0] for p in component_pos.values()) if component_pos else 0
@@ -1388,10 +1488,13 @@ def server(input, output, session):
                 
                 # If no components meet the size requirement, revert to standard layout
                 if not filtered_components:
-                    if input.use_weighted():
-                        pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
-                    else:
-                        pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+                    # Use selected algorithm for full graph when no components meet size requirement
+                    pos = get_layout_algorithm(
+                        input.layout_algorithm(), 
+                        graph, 
+                        spring_args, 
+                        weighted=input.use_weighted()
+                    )
                 else:
                     # Second pass - arrange components in a grid, same as in your visualization code
                     current_x, current_y = 0, 0
@@ -1428,31 +1531,14 @@ def server(input, output, session):
                     'scale': input.layout_scale()
                 }
                 ###
-                if len(graph.nodes()) > 1000:  # For very large graphs
-                    # Use graphviz's sfdp algorithm which is much faster
-                    import pygraphviz as pgv
-                    G = pgv.AGraph(strict=False, directed=True)
-                    
-                    # Add nodes and edges
-                    for node in graph.nodes():
-                        G.add_node(node)
-                    for u, v in graph.edges():
-                        G.add_edge(u, v)
-                    
-                    # Use sfdp layout
-                    G.layout(prog='sfdp')
-                    
-                    # Extract positions
-                    pos = {}
-                    for node in graph.nodes():
-                        if node in G:
-                            pos[node] = tuple(map(float, G.get_node(node).attr['pos'].split(',')))
-                else:
-                    # Use NetworkX layouts for smaller graphs
-                    if input.use_weighted():
-                        pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
-                    else:
-                        pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+                # Use selected algorithm for static graph layout (regardless of size)
+                logger.info(f"Using {input.layout_algorithm()} layout algorithm for static graph with {len(graph.nodes())} nodes")
+                pos = get_layout_algorithm(
+                    input.layout_algorithm(), 
+                    graph, 
+                    spring_args, 
+                    weighted=input.use_weighted()
+                )
 
 
             # Create figure with appropriate styling
@@ -1556,7 +1642,29 @@ def server(input, output, session):
             import traceback
             logger.debug(f"Static graph traceback: {traceback.format_exc()}")
         ###
-    # Unified graph rendering function
+    # Update selection colors without full re-render
+    @reactive.effect
+    @reactive.event(clicked_nodes, input.selected_nodes, input.selected_sequences)
+    def update_selection_colors():
+        """Update node selection colors on existing FigureWidget"""
+        fig_widget = current_fig_widget.get()
+        if fig_widget is None:
+            return
+        
+        # Get all selected nodes (from clicks and text input)
+        all_selected_nodes = set(clicked_nodes.get())
+        
+        if input.selected_nodes() and input.selected_nodes().strip():
+            text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+            all_selected_nodes.update(text_nodes)
+        
+        selected_nodes = list(all_selected_nodes) if all_selected_nodes else None
+        dark_mode = (input.app_theme() != "latte")
+        
+        # Update colors directly
+        update_node_selection_colors(fig_widget, selected_nodes, dark_mode)
+    
+    # Unified graph rendering function (excluding selection dependencies)
     @output
     @render_widget
     @reactive.event(
@@ -1570,15 +1678,15 @@ def server(input, output, session):
         input.layout_k,
         input.layout_iterations,
         input.layout_scale,
-        input.selected_nodes,
-        input.selected_sequences,
-        clicked_nodes,
+        input.layout_algorithm,
         input.use_static_image  # Add this dependency
     )
     def unified_graph():
         """Render the unified graph widget"""
 
         if input.use_static_image():
+            # Clear the stored widget when using static
+            current_fig_widget.set(None)
             # Return an empty widget
             empty_fig = go.FigureWidget()
             empty_fig.update_layout(
@@ -1596,6 +1704,7 @@ def server(input, output, session):
         # Check if we have a graph to display
         graph_path = current_graph_path.get()
         if graph_path is None:
+            current_fig_widget.set(None)
             empty_fig = go.FigureWidget(layout=current_template()['layout'])
             empty_fig.update_layout(
                 height=800,
@@ -1611,21 +1720,8 @@ def server(input, output, session):
             return empty_fig
         
         try:
-            # Parse selected nodes and sequences
-            selected_nodes = None
+            # Parse sequences only (selection handled separately)
             selected_sequences = None
-            
-            # Get all selected nodes (from clicks and text input)
-            all_selected_nodes = set(clicked_nodes.get())
-            
-            if input.selected_nodes() and input.selected_nodes().strip():
-                text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
-                all_selected_nodes.update(text_nodes)
-            
-            if all_selected_nodes:
-                selected_nodes = list(all_selected_nodes)
-                logger.debug(f"Selected nodes: {selected_nodes}")
-            
             if input.selected_sequences() and input.selected_sequences().strip():
                 selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
             
@@ -1642,6 +1738,7 @@ def server(input, output, session):
             # Check if file exists
             if not Path(graph_path).exists():
                 logger.warning(f"Graph file not found: {graph_path}")
+                current_fig_widget.set(None)
                 error_fig = go.FigureWidget(layout=current_template()['layout'])
                 error_fig.update_layout(
                     height=800,
@@ -1657,7 +1754,7 @@ def server(input, output, session):
             
             logger.info(f"Creating graph from file: {graph_path}")
             
-            # Create the graph plot  
+            # Create the graph plot without selected_nodes (handled separately)
             fig = create_graph_plot(
                 graph_path,
                 dark_mode=(input.app_theme() != "latte"),
@@ -1666,9 +1763,10 @@ def server(input, output, session):
                 separate_components=input.separate_components(),
                 component_padding=input.component_padding(),
                 min_component_size=input.min_component_size(),
-                selected_nodes=selected_nodes,
+                selected_nodes=None,  # Don't include selection in base plot
                 selected_sequences=selected_sequences,
                 path_nodes=path_nodes,
+                layout_algorithm=input.layout_algorithm(),
                 spring_args={
                     'k': input.layout_k(),
                     'iterations': input.layout_iterations(),
@@ -1714,6 +1812,9 @@ def server(input, output, session):
                     trace.on_click(on_node_click)
                     break
             
+            # Store the FigureWidget for selection updates
+            current_fig_widget.set(fig_widget)
+            
             return fig_widget
             
         except Exception as e:
@@ -1721,6 +1822,7 @@ def server(input, output, session):
             import traceback
             logger.error(traceback.format_exc())
             
+            current_fig_widget.set(None)
             error_fig = go.FigureWidget(layout=current_template()['layout'])
             error_fig.update_layout(
                 height=800,
