@@ -179,6 +179,8 @@ def server(input, output, session):
     path_results = reactive.Value(None)
     dataset = reactive.Value(None)
     current_template = reactive.Value(DARK_TEMPLATE)
+    current_static_image = reactive.Value(None)
+
     
     # Node selection state management
     clicked_nodes = reactive.Value(set())  # Store clicked node IDs
@@ -1001,6 +1003,31 @@ def server(input, output, session):
         # Build path based on selected graph type
         base_path = f"{Path(__file__).parent}/"
         graph_suffix = input.umi()
+        source_graph_path = f"{base_path}{graph_suffix}__{input.graph_type()}.dot"
+        
+        if Path(source_graph_path).exists():
+            # Copy to central location instead of just setting the path
+            central_path = get_central_graph_path()
+            try:
+                import shutil
+                shutil.copy2(source_graph_path, central_path)
+                current_graph_path.set(str(central_path))
+                graph_source_type.set("assembly")
+                ui.notification_show(f"Loaded {input.graph_type()} graph", type="success", duration=2)
+            except Exception as e:
+                ui.notification_show(f"Error copying graph: {str(e)}", type="error")
+        else:
+            ui.notification_show(f"Graph file not found: {source_graph_path}", type="error")
+
+    def generate_assembly_graph():
+        """Generate graph from assembly when button clicked"""
+        if assembly_result() is None:
+            ui.notification_show("Please run assembly first", type="warning")
+            return
+        
+        # Build path based on selected graph type
+        base_path = f"{Path(__file__).parent}/"
+        graph_suffix = input.umi()
         graph_path = f"{base_path}{graph_suffix}__{input.graph_type()}.dot"
         
         if Path(graph_path).exists():
@@ -1017,17 +1044,125 @@ def server(input, output, session):
         """Handle uploaded DOT file"""
         if input.dot_file() is not None:
             file_info = input.dot_file()
-            dot_file_path = file_info[0]["datapath"]
-            logger.info(f"DOT file uploaded: {dot_file_path}")
+            uploaded_dot_path = file_info[0]["datapath"]
+            logger.info(f"DOT file uploaded: {uploaded_dot_path}")
             
-            # Set the radio button to upload mode
-            ui.update_radio_buttons("graph_source", selected="upload")
-            
-            current_graph_path.set(dot_file_path)
-            graph_source_type.set("upload")
-            ui.notification_show("DOT file loaded", type="success", duration=2)
+            # Copy to central location instead of just setting the path
+            central_path = get_central_graph_path()
+            try:
+                import shutil
+                shutil.copy2(uploaded_dot_path, central_path)
+                
+                # Set the radio button to upload mode
+                ui.update_radio_buttons("graph_source", selected="upload")
+                
+                current_graph_path.set(str(central_path))
+                graph_source_type.set("upload")
+                ui.notification_show("DOT file loaded", type="success", duration=2)
+            except Exception as e:
+                ui.notification_show(f"Error copying uploaded file: {str(e)}", type="error")
         else:
             logger.info("DOT file cleared or None")
+    @reactive.Effect
+    @reactive.event(
+        current_graph_path, 
+        input.app_theme,
+        input.use_weighted,
+        input.weight_method,
+        input.separate_components,
+        input.component_padding,
+        input.min_component_size,
+        input.layout_k,
+        input.layout_iterations,
+        input.layout_scale,
+        input.selected_nodes,
+        input.selected_sequences,
+        clicked_nodes,
+        input.use_static_image  # Add this dependency
+    )
+    def generate_static_graph():
+        """Generate a static PNG image of the graph when parameters change"""
+        # Only generate if static image option is enabled
+        if not input.use_static_image():
+            return
+            
+        logger.info("Generating static graph image")
+        graph_path = current_graph_path.get()
+        if graph_path is None:
+            logger.warning("No graph path available for static image generation")
+            return
+            
+        try:
+            # Similar logic to unified_graph for creating the figure
+            selected_nodes = None
+            selected_sequences = None
+            
+            # Get all selected nodes (from clicks and text input)
+            all_selected_nodes = set(clicked_nodes.get())
+            
+            if input.selected_nodes() and input.selected_nodes().strip():
+                text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+                all_selected_nodes.update(text_nodes)
+            
+            if all_selected_nodes:
+                selected_nodes = list(all_selected_nodes)
+            
+            if input.selected_sequences() and input.selected_sequences().strip():
+                selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
+            
+            # Determine path nodes if this is from assembly
+            path_nodes = None
+            if graph_source_type.get() == "assembly" and path_results() is not None:
+                path_data = path_results()
+                if isinstance(path_data, list) and len(path_data) > 0:
+                    path_nodes = set()
+                    for path in path_data:
+                        if 'path' in path:
+                            path_nodes.update(path['path'])
+            
+            # Create the graph plot
+            fig = create_graph_plot(
+                graph_path,
+                dark_mode=(input.app_theme() != "latte"),
+                weighted=input.use_weighted(),
+                weight_method=input.weight_method(),
+                separate_components=input.separate_components(),
+                component_padding=input.component_padding(),
+                min_component_size=input.min_component_size(),
+                selected_nodes=selected_nodes,
+                selected_sequences=selected_sequences,
+                path_nodes=path_nodes,
+                spring_args={
+                    'k': input.layout_k(),
+                    'iterations': input.layout_iterations(),
+                    'scale': input.layout_scale()
+                }
+            )
+            
+            # Generate file path for the static image
+            base_dir = Path(__file__).parent
+            static_dir = base_dir / "static"
+            static_dir.mkdir(exist_ok=True)
+            
+            # Use timestamp to ensure unique filenames
+            import time
+            timestamp = int(time.time())
+            
+            # Save with graph source type in filename
+            image_filename = f"graph_{graph_source_type.get()}_{timestamp}.png"
+            image_path = static_dir / image_filename
+            
+            # Save the figure as a PNG
+            fig.write_image(str(image_path), width=1200, height=800)
+            logger.info(f"Saved static graph image to {image_path}")
+            
+            # Store the current static image path in a reactive value
+            current_static_image.set(str(image_path))
+            
+        except Exception as e:
+            logger.error(f"Error generating static graph image: {str(e)}")
+            import traceback
+            logger.debug(f"Static graph traceback: {traceback.format_exc()}")
 
     # Unified graph rendering function
     @output
@@ -1192,4 +1327,11 @@ def server(input, output, session):
             )
             return error_fig
 
+def get_central_graph_path():
+    """Get the central location where all graphs will be stored"""
+    base_path = Path(__file__).parent
+    central_path = base_path / "data" / "current_assembly_graph.dot"
+    # Ensure directory exists
+    central_path.parent.mkdir(exist_ok=True, parents=True)
+    return central_path
 app = App(app_ui, server)

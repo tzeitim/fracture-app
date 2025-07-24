@@ -183,6 +183,16 @@ def create_graph_controls():
     return ui.panel_well(
         ui.h4("Graph Display Options"),
         ui.input_switch(
+            "use_static_image",
+            "Use Static Image (PNG)",
+            value=True  
+            ),
+        ui.download_button(
+            "download_static_graph", 
+            "Download PNG",
+            icon="download"
+        ),
+        ui.input_switch(
             "use_weighted",
             "Use Weighted Layout",
             value=False
