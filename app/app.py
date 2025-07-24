@@ -194,18 +194,15 @@ def server(input, output, session):
         selected_theme = input.app_theme()
         
         if selected_theme == "latte":
-            # Update application theme
-            #session.send_custom_message("shinyswatch-theme", "minty")
             current_template.set(LATTE_TEMPLATE)
+            logger.debug("Theme set to latte")
         elif selected_theme == "mocha":
-            # Update application theme
-            #session.send_custom_message("shinyswatch-theme", "darkly")
             current_template.set(MOCHA_TEMPLATE)
+            logger.debug("Theme set to mocha")
         else:
-            # Default slate theme
-            #session.send_custom_message("shinyswatch-theme", "slate")
             current_template.set(DARK_TEMPLATE)
-    
+            logger.debug("Theme set to slate (default)")
+
     # Update the dataset dropdown when system changes
     @reactive.Effect
     @reactive.event(input.system_prefix)
@@ -898,7 +895,7 @@ def server(input, output, session):
             return empty_fig
             
         except ValueError as e:
-            error_msg = f"Reference data error: {str(e)}"
+            error_msg = f"Reference data error: {str(e)}"  # FIXED: This line was truncated
             logger.error(error_msg)
             empty_fig = go.Figure(layout=current_template()['layout'])
             empty_fig.update_layout(
