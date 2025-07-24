@@ -178,3 +178,6 @@ cython_debug/
 .pypirc
 .DS_Store
 Cargo.lock
+app/data
+app/www
+*.dot

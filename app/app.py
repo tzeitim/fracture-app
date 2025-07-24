@@ -61,6 +61,7 @@ app_ui = ui.page_fluid(
         z-index: 1050; /* Ensure it appears on top */
     }
     """),
+    
     ui.h2("FRACTURE Explorer"),
     ui.output_ui("top_contigs"),
     ui.output_ui("path_results_output"),
@@ -651,12 +652,73 @@ def server(input, output, session):
             logger.error(f"Error in selected_nodes_table: {e}")
             return ui.div(ui.p(f"Error: {str(e)}", style="color: red;"))
     
+    def get_tab_animation_css():
+        """CSS for tab animation effects"""
+        return """
+        /* Tab shine animation keyframes */
+        @keyframes tabShine {
+            0% { 
+                background: linear-gradient(90deg, transparent, transparent);
+                color: inherit;
+            }
+            25% { 
+                background: linear-gradient(90deg, transparent, rgba(255,215,0,0.3), transparent);
+                color: #ffd700;
+                text-shadow: 0 0 8px rgba(255,215,0,0.6);
+            }
+            50% { 
+                background: linear-gradient(90deg, transparent, rgba(255,215,0,0.5), transparent);
+                color: #ffd700;
+                text-shadow: 0 0 12px rgba(255,215,0,0.8);
+            }
+            75% { 
+                background: linear-gradient(90deg, transparent, rgba(255,215,0,0.3), transparent);
+                color: #ffd700;
+                text-shadow: 0 0 8px rgba(255,215,0,0.6);
+            }
+            100% { 
+                background: linear-gradient(90deg, transparent, transparent);
+                color: inherit;
+            }
+        }
+        
+        @keyframes tabPulse {
+            0%, 100% { 
+                transform: scale(1); 
+                box-shadow: 0 0 0px rgba(255,215,0,0);
+            }
+            50% { 
+                transform: scale(1.05); 
+                box-shadow: 0 0 15px rgba(255,215,0,0.4);
+            }
+        }
+        
+        /* Classes to apply animations */
+        .tab-attention {
+            animation: tabShine 2s ease-in-out infinite, tabPulse 2s ease-in-out infinite;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        
+        .tab-attention:hover {
+            animation: none;
+            background: rgba(255,215,0,0.2) !important;
+            color: #ffd700 !important;
+        }
+        
+        /* Remove animation after some time */
+        .tab-attention-fade {
+            animation: tabShine 2s ease-in-out 3, tabPulse 2s ease-in-out 3;
+        }
+        """
+
     @output
     @render.ui
     def theme_css():
         theme = input.app_theme()
+        base_animations = get_tab_animation_css()
         if theme == "latte":
-            return ui.tags.style("""
+            return ui.tags.style(base_animations + """
             body {
                 background-color: #eff1f5 !important;
                 color: #4c4f69 !important;
@@ -708,7 +770,7 @@ def server(input, output, session):
             }
             """)
         elif theme == "mocha":
-            return ui.tags.style("""
+            return ui.tags.style(base_animations + """
             body {
                 background-color: #1e1e2e !important;
                 color: #cdd6f4 !important;
@@ -761,7 +823,7 @@ def server(input, output, session):
             """)
         else:
             # Default slate theme styling
-            return ui.tags.style("""
+            return ui.tags.style(base_animations + """
             .radio-inline, .checkbox-inline {
                 background-color: #444d56 !important;
                 color: #ffffff !important;
@@ -945,6 +1007,58 @@ def server(input, output, session):
             logger.debug(f"Traceback: {traceback.format_exc()}")
             ui.notification_show(error_msg, type="error")
 
+    def trigger_tab_animation():
+        """Trigger the Graph Explorer tab animation to guide user attention"""
+        try:
+            # Use JavaScript injection instead of custom message
+            js_code = """
+            $(document).ready(function() {
+                // Find the Graph Explorer tab
+                var tabLinks = $('a[data-bs-toggle="tab"], a[data-toggle="tab"]');
+                var targetTab = null;
+                
+                tabLinks.each(function() {
+                    if ($(this).text().trim() === 'Graph Explorer') {
+                        targetTab = $(this);
+                        return false;
+                    }
+                });
+                
+                if (targetTab) {
+                    console.log('Found Graph Explorer tab, applying animation');
+                    
+                    // Add the animation class
+                    targetTab.addClass('tab-attention');
+                    
+                    // Remove animation after 6 seconds
+                    setTimeout(function() {
+                        targetTab.removeClass('tab-attention');
+                        console.log('Animation removed from tab');
+                    }, 6000);
+                    
+                    // Also remove animation if user clicks the tab
+                    targetTab.one('click', function() {
+                        $(this).removeClass('tab-attention');
+                        console.log('Animation removed due to tab click');
+                    });
+                } else {
+                    console.log('Graph Explorer tab not found');
+                }
+            });
+            """
+            
+            # Insert the JavaScript code into the page
+            ui.insert_ui(
+                selector="head",
+                where="beforeend",
+                ui=ui.tags.script(js_code),
+                immediate=True
+            )
+        except Exception as e:
+            logger.error(f"Error triggering tab animation: {e}")
+            # Fallback: just show a notification
+            ui.notification_show("✨ Check out the Graph Explorer tab!", type="message", duration=3)
+
     def handle_assembly_result(result):
         """Common function to handle assembly results"""
         try:
@@ -974,6 +1088,9 @@ def server(input, output, session):
                         f"Assembly completed successfully! Contig length: {len(contig)}",
                         type="message"
                         )
+                
+                # Trigger tab animation to guide user to Graph Explorer
+                trigger_tab_animation()
             else:
                 ui.notification_show("Assembly produced no contigs", type="warning")
                 assembly_result.set(None)
@@ -1519,7 +1636,8 @@ def server(input, output, session):
         input.layout_iterations,
         input.layout_scale,
         input.layout_algorithm,
-        input.use_static_image
+        input.use_static_image,
+        input.show_node_labels
     )
     def generate_static_graph():
         """Generate a static PNG image of the graph preserving NetworkX layout"""
@@ -1726,12 +1844,13 @@ def server(input, output, session):
                 alpha=0.9
             )
             
-            # Draw labels
-            nx.draw_networkx_labels(
-                graph, pos,
-                font_color=text_color,
-                font_size=8
-            )
+            # Draw labels (conditional based on toggle)
+            if input.show_node_labels():
+                nx.draw_networkx_labels(
+                    graph, pos,
+                    font_color=text_color,
+                    font_size=8
+                )
             
             plt.title("Assembly Graph", color=text_color, fontsize=16)
             plt.axis('off')

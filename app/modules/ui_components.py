@@ -206,6 +206,11 @@ def create_graph_controls():
             "Use Static Image (PNG)",
             value=True  
             ),
+        ui.input_switch(
+            "show_node_labels",
+            "Show Node Labels in PNG",
+            value=False
+            ),
         ui.download_button(
             "download_static_graph", 
             "Download PNG",
