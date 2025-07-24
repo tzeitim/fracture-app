@@ -376,7 +376,7 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
 def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', 
                       debug=False, path_nodes=None, weighted=False, weight_method='nlog', 
                       separate_components=False, component_padding=3.0, min_component_size=3, spring_args=None,
-                      selected_nodes=None, selected_sequences=None):
+                      selected_nodes=None, selected_sequences=None, precalculated_positions=None):
     """Create an interactive plot of the assembly graph.
     
     Args:
@@ -408,117 +408,121 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
     if weighted:
         graph = create_weighted_graph(graph, weight_method)
     
+    
     # Calculate node positions based on layout settings
-    if separate_components:
-        # Identify connected components for separate layout
-        components = list(nx.connected_components(graph.to_undirected()))
-        
-        # Filter out components smaller than min_component_size
-        filtered_components = [comp for comp in components if len(comp) >= min_component_size]
-        print(f"Graph has {len(components)} connected components, {len(filtered_components)} meet the minimum size requirement")
-        
-        # Sort components by size (largest first)
-        filtered_components.sort(key=len, reverse=True)
-        
-        # Calculate layout for each component and place in a grid
-        pos = {}
-        component_info = []  # Store component info for grid placement
-        
-        # First pass - calculate layouts and store info
-        for component in filtered_components:
-            # Create subgraph for this component
-            subgraph = graph.subgraph(component)
+    if precalculated_positions is not None:
+        pos = precalculated_positions
+    else:
+        if separate_components:
+            # Identify connected components for separate layout
+            components = list(nx.connected_components(graph.to_undirected()))
             
-            # Calculate layout for this component
-            if weighted:
-                component_pos = nx.spring_layout(subgraph, weight='weight', **spring_args, seed=42)
+            # Filter out components smaller than min_component_size
+            filtered_components = [comp for comp in components if len(comp) >= min_component_size]
+            print(f"Graph has {len(components)} connected components, {len(filtered_components)} meet the minimum size requirement")
+            
+            # Sort components by size (largest first)
+            filtered_components.sort(key=len, reverse=True)
+            
+            # Calculate layout for each component and place in a grid
+            pos = {}
+            component_info = []  # Store component info for grid placement
+            
+            # First pass - calculate layouts and store info
+            for component in filtered_components:
+                # Create subgraph for this component
+                subgraph = graph.subgraph(component)
+                
+                # Calculate layout for this component
+                if weighted:
+                    component_pos = nx.spring_layout(subgraph, weight='weight', **spring_args, seed=42)
+                else:
+                    component_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
+                
+                # Find bounding box and scale factor based on component size
+                min_x = min(p[0] for p in component_pos.values()) if component_pos else 0
+                max_x = max(p[0] for p in component_pos.values()) if component_pos else 0
+                min_y = min(p[1] for p in component_pos.values()) if component_pos else 0
+                max_y = max(p[1] for p in component_pos.values()) if component_pos else 0
+                width = max_x - min_x
+                height = max_y - min_y
+                
+                # Normalize the scale based on component size
+                # Calculate a scale factor proportional to sqrt(component size)
+                # This ensures larger components get more space but not excessively so
+                scale_factor = np.sqrt(len(component)) / 2.0
+                
+                component_info.append({
+                    'component': component,
+                    'pos': component_pos,
+                    'width': width * scale_factor,
+                    'height': height * scale_factor,
+                    'scale_factor': scale_factor,
+                    'size': len(component)
+                })
+            
+            # If no components meet the size requirement, revert to standard layout
+            if not filtered_components:
+                if weighted:
+                    pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+                else:
+                    pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
             else:
-                component_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
-            
-            # Find bounding box and scale factor based on component size
-            min_x = min(p[0] for p in component_pos.values()) if component_pos else 0
-            max_x = max(p[0] for p in component_pos.values()) if component_pos else 0
-            min_y = min(p[1] for p in component_pos.values()) if component_pos else 0
-            max_y = max(p[1] for p in component_pos.values()) if component_pos else 0
-            width = max_x - min_x
-            height = max_y - min_y
-            
-            # Normalize the scale based on component size
-            # Calculate a scale factor proportional to sqrt(component size)
-            # This ensures larger components get more space but not excessively so
-            scale_factor = np.sqrt(len(component)) / 2.0
-            
-            component_info.append({
-                'component': component,
-                'pos': component_pos,
-                'width': width * scale_factor,
-                'height': height * scale_factor,
-                'scale_factor': scale_factor,
-                'size': len(component)
-            })
-        
-        # If no components meet the size requirement, revert to standard layout
-        if not filtered_components:
+                # Second pass - arrange components in a grid, starting with largest component at top left
+                current_x, current_y = 0, 0
+                
+                # Group components into rows
+                rows = []
+                current_row = []
+                current_row_width = 0
+                max_row_width = 20.0  # Maximum width for a row before starting a new row
+                
+                for info in component_info:
+                    # If adding this component would exceed the max row width, start a new row
+                    if current_row_width + info['width'] + component_padding > max_row_width and current_row:
+                        rows.append(current_row)
+                        current_row = [info]
+                        current_row_width = info['width']
+                    else:
+                        current_row.append(info)
+                        current_row_width += info['width'] + component_padding
+                
+                # Add the last row if not empty
+                if current_row:
+                    rows.append(current_row)
+                
+                # Position components within rows
+                current_y = 0
+                for row in rows:
+                    current_x = 0
+                    max_height_in_row = max(info['height'] for info in row) if row else 0
+                    
+                    for info in row:
+                        component = info['component']
+                        component_pos = info['pos']
+                        scale_factor = info['scale_factor']
+                        
+                        # Apply scaling and offset to this component's positions
+                        for node, (x, y) in component_pos.items():
+                            # Scale the position
+                            scaled_x = x * scale_factor
+                            scaled_y = y * scale_factor
+                            
+                            # Apply offset
+                            pos[node] = (scaled_x + current_x, scaled_y + current_y)
+                        
+                        # Move to the next position in the row
+                        current_x += info['width'] + component_padding
+                    
+                    # Move to the next row
+                    current_y += max_height_in_row + component_padding
+        else:
+            # Use standard layout for the entire graph
             if weighted:
                 pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
             else:
+                # Calculate layout
                 pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
-        else:
-            # Second pass - arrange components in a grid, starting with largest component at top left
-            current_x, current_y = 0, 0
-            
-            # Group components into rows
-            rows = []
-            current_row = []
-            current_row_width = 0
-            max_row_width = 20.0  # Maximum width for a row before starting a new row
-            
-            for info in component_info:
-                # If adding this component would exceed the max row width, start a new row
-                if current_row_width + info['width'] + component_padding > max_row_width and current_row:
-                    rows.append(current_row)
-                    current_row = [info]
-                    current_row_width = info['width']
-                else:
-                    current_row.append(info)
-                    current_row_width += info['width'] + component_padding
-            
-            # Add the last row if not empty
-            if current_row:
-                rows.append(current_row)
-            
-            # Position components within rows
-            current_y = 0
-            for row in rows:
-                current_x = 0
-                max_height_in_row = max(info['height'] for info in row) if row else 0
-                
-                for info in row:
-                    component = info['component']
-                    component_pos = info['pos']
-                    scale_factor = info['scale_factor']
-                    
-                    # Apply scaling and offset to this component's positions
-                    for node, (x, y) in component_pos.items():
-                        # Scale the position
-                        scaled_x = x * scale_factor
-                        scaled_y = y * scale_factor
-                        
-                        # Apply offset
-                        pos[node] = (scaled_x + current_x, scaled_y + current_y)
-                    
-                    # Move to the next position in the row
-                    current_x += info['width'] + component_padding
-                
-                # Move to the next row
-                current_y += max_height_in_row + component_padding
-    else:
-        # Use standard layout for the entire graph
-        if weighted:
-            pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
-        else:
-            # Calculate layout
-            pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
     
     # Extract node information
     node_x, node_y = [], []
