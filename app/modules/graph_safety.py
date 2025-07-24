@@ -61,15 +61,22 @@ class GraphSafetyManager:
     
     def create_static_rendering(self, graph: nx.Graph, 
                               title: str = "Large Graph (Static View)",
-                              sample_size: Optional[int] = None) -> go.Figure:
+                              sample_size: Optional[int] = None,
+                              dark_mode: bool = True,
+                              **kwargs) -> go.Figure:
         """
-        Create a static, non-interactive rendering for very large graphs.
+        Create a static, non-interactive rendering for very large graphs with proper node data parsing.
         
         Args:
             graph: NetworkX graph
             title: Title for the plot
             sample_size: If provided, sample this many nodes for visualization
+            dark_mode: Whether to use dark theme colors
+            **kwargs: Additional visualization arguments
         """
+        from .visualization import extract_coverage, parse_node_label, get_node_style
+        from .config import SEQUENCE_COLORS
+        
         fig = go.Figure()
         
         # Add graph statistics
@@ -98,14 +105,68 @@ class GraphSafetyManager:
             # Fallback to random layout
             pos = nx.random_layout(subgraph)
         
-        # Extract positions
-        node_x = [pos[node][0] for node in subgraph.nodes()]
-        node_y = [pos[node][1] for node in subgraph.nodes()]
+        # Parse node data similar to create_graph_plot
+        node_x, node_y = [], []
+        node_colors = []
+        node_sizes = []
+        coverages = []
+        
+        # First pass to collect coverage values for scaling
+        for node in subgraph.nodes():
+            attrs = subgraph.nodes[node]
+            label = attrs.get('label', '')
+            if isinstance(label, str):
+                coverage = extract_coverage(label.strip('"'))
+                if coverage is not None:
+                    coverages.append(coverage)
+        
+        # Calculate size scaling factors
+        min_coverage = min(coverages) if coverages else 1
+        max_coverage = max(coverages) if coverages else 1
+        min_size = 4  # Smaller for static view
+        max_size = 20  # Smaller for static view
+        
+        # Second pass to build node properties with proper data parsing
+        for node in subgraph.nodes():
+            if node not in pos:
+                continue
+                
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            
+            attrs = subgraph.nodes[node]
+            label = attrs.get('label', '')
+            
+            if isinstance(label, str):
+                # Parse node label like in create_graph_plot
+                label = label.strip('"').replace('\\\\n', '\n').replace('\\n', '\n')
+                id_part, seq_part, cov_part = parse_node_label(label)
+                
+                # Get node style with proper color based on sequence
+                node_style = get_node_style(seq_part, SEQUENCE_COLORS, dark_mode, 
+                                          node_id=node, path_nodes=None, 
+                                          selected_nodes=None, selected_sequences=None)
+                node_colors.append(node_style['color'])
+                
+                # Calculate node size based on coverage
+                coverage = extract_coverage(label)
+                if coverage is not None and max_coverage > min_coverage:
+                    size = min_size + (max_size - min_size) * (coverage - min_coverage) / (max_coverage - min_coverage)
+                else:
+                    size = min_size
+                node_sizes.append(size)
+            else:
+                # Fallback for nodes without proper labels
+                node_colors.append('rgba(0,0,0,0)')
+                node_sizes.append(min_size)
         
         # Create simplified edges (no hover text)
         edge_x = []
         edge_y = []
         for edge in subgraph.edges():
+            if edge[0] not in pos or edge[1] not in pos:
+                continue
             x0, y0 = pos[edge[0]]
             x1, y1 = pos[edge[1]]
             edge_x.extend([x0, x1, None])
@@ -115,41 +176,70 @@ class GraphSafetyManager:
         fig.add_trace(go.Scatter(
             x=edge_x, y=edge_y,
             mode='lines',
-            line=dict(width=0.5, color='#888'),
+            line=dict(width=1.0, color='#8fa1b3' if dark_mode else '#555'),
             hoverinfo='skip',
             showlegend=False
         ))
         
-        # Add nodes (no labels or hover for performance)
+        # Add nodes with proper colors and sizes
         fig.add_trace(go.Scatter(
             x=node_x, y=node_y,
             mode='markers',
             marker=dict(
-                size=3,
-                color='#4895fa',
-                line=dict(width=0)
+                size=node_sizes,
+                color=node_colors,
+                line=dict(width=1.0, color='#c0c5ce' if dark_mode else '#444')
             ),
             hoverinfo='skip',
             showlegend=False
         ))
         
-        # Update layout
+        # Update layout with proper theming
+        bg_color = '#2d3339' if dark_mode else '#ffffff'
+        text_color = '#ffffff' if dark_mode else '#000000'
+        
+        # Calculate axis ranges based on node positions, excluding outliers
+        import numpy as np
+        node_x_array = np.array(node_x)
+        node_y_array = np.array(node_y)
+        
+        # Use percentiles to exclude extreme outliers
+        x_min, x_max = np.percentile(node_x_array, [1, 99])
+        y_min, y_max = np.percentile(node_y_array, [1, 99])
+        
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        padding = 0.05
+        
         fig.update_layout(
-            title=dict(text=title, x=0.5),
+            title=dict(text=title, x=0.5, font=dict(color=text_color)),
             showlegend=False,
             hovermode=False,  # Disable hover for performance
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            plot_bgcolor='white',
+            xaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False,
+                range=[x_min - x_range * padding, x_max + x_range * padding]
+            ),
+            yaxis=dict(
+                showgrid=False, 
+                zeroline=False, 
+                showticklabels=False,
+                range=[y_min - y_range * padding, y_max + y_range * padding]
+            ),
+            plot_bgcolor=bg_color,
+            paper_bgcolor=bg_color,
+            font_color=text_color,
             annotations=[
                 dict(
                     text=stats_text,
                     xref="paper", yref="paper",
                     x=0.02, y=0.98,
                     showarrow=False,
-                    bgcolor="rgba(255,255,255,0.8)",
+                    bgcolor="rgba(255,255,255,0.8)" if not dark_mode else "rgba(0,0,0,0.8)",
                     bordercolor="#888",
-                    borderwidth=1
+                    borderwidth=1,
+                    font=dict(color=text_color)
                 )
             ]
         )
@@ -229,7 +319,8 @@ def create_safe_graph_widget(dot_path: str,
             fig = safety_manager.create_static_rendering(
                 graph, 
                 title=f"Large Graph ({size_info['node_count']} nodes)",
-                sample_size=1000
+                sample_size=1000,
+                **viz_kwargs  # Pass through visualization arguments including dark_mode
             )
             actual_mode = 'static'
         elif mode == 'simplified':

@@ -1104,22 +1104,36 @@ def server(input, output, session):
         """Render the unified graph widget with safety mechanism"""
         logger.info(f"Rendering unified graph - source: {graph_source_type.get()}, path: {current_graph_path.get()}")
         
+        # Force clear any existing widget content
+        # This helps prevent multiple widgets from stacking
+        
         # Check if we have a graph to display
         graph_path = current_graph_path.get()
         if graph_path is None:
-            empty_fig = go.FigureWidget(layout=current_template()['layout'])
-            empty_fig.update_layout(
+            # Create multiple test figures to compare different approaches
+            test_fig = go.FigureWidget()
+            
+            # Test 1: Simple working test
+            test_fig.add_scatter(x=[1, 2, 3, 4], y=[10, 11, 12, 13], mode='markers+lines', name='simple_test', 
+                               line=dict(color='cyan', width=3), marker=dict(color='red', size=10))
+            
+            # Test 2: Same coordinates as actual graph data
+            test_fig.add_scatter(x=[0.4, -0.36, 0.399], y=[-0.057, -0.171, -0.053], mode='markers+lines', name='graph_coords',
+                               line=dict(color='yellow', width=3), marker=dict(color='orange', size=10))
+            
+            # Test 3: Same styling as graph (to see if styling is the issue)
+            test_fig.add_scatter(x=[0.5, 0.6, 0.7], y=[0.1, 0.2, 0.3], mode='markers', name='graph_style',
+                               marker=dict(color='rgba(0,0,0,0)', line=dict(color='#c0c5ce', width=1), size=[8, 10, 12]))
+            
+            test_fig.update_layout(
+                title="Multi-Test: Simple + Graph Coords + Graph Style",
                 height=800,
-                autosize=True,
-                annotations=[dict(
-                    text="Generate a graph from assembly or upload a DOT file",
-                    xref="paper", yref="paper",
-                    x=0.5, y=0.5,
-                    showarrow=False,
-                    font=dict(color='#888', size=16)
-                )]
+                showlegend=True,
+                xaxis=dict(range=[-1, 1]),
+                yaxis=dict(range=[-1, 1])
             )
-            return empty_fig
+            logger.info("Returning multi-test figure")
+            return test_fig
         
         try:
             # Prepare visualization kwargs
@@ -1138,6 +1152,8 @@ def server(input, output, session):
                     'scale': input.layout_scale()
                 }
             }
+            
+            logger.info(f"Viz kwargs: {viz_kwargs}")
             
             # Add selection info if not in static mode
             if input.graph_render_mode() != 'static':
@@ -1161,6 +1177,7 @@ def server(input, output, session):
                 user_override=input.graph_render_mode(),
                 **viz_kwargs
             )
+            
             
             # Update current graph size info
             current_graph_size.set(metadata)

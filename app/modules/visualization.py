@@ -115,7 +115,7 @@ def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=Non
     if not seq:
         return dict(
             color='rgba(0,0,0,0)', 
-            line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+            line=dict(color='#c0c5ce' if dark_mode else '#555', width=1)
         )
 
     # Clean up sequence string
@@ -126,7 +126,7 @@ def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=Non
         if not any(target_seq in seq for target_seq in sequence_colors.keys()):
             return dict(
                 color='rgba(255, 215, 0, 0.15)', # yellow 30 alpha
-                line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+                line=dict(color='#c0c5ce' if dark_mode else '#555', width=1)
             )
     
     # Priority 2: Check for presence of both anchor sequences
@@ -134,7 +134,7 @@ def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=Non
     if has_both:
         return dict(
             color='#FFA500',  # Orange for nodes with both anchors
-            line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+            line=dict(color='#c0c5ce' if dark_mode else '#555', width=1)
         )
     
     # Priority 3: Check for individual anchor sequences
@@ -142,13 +142,13 @@ def get_node_style(seq, sequence_colors, dark_mode, node_id=None, path_nodes=Non
         if target_seq in seq:
             return dict(
                 color=color,
-                line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+                line=dict(color='#c0c5ce' if dark_mode else '#555', width=1)
             )
     
     # Default style for nodes without special properties
     return dict(
         color='rgba(0,0,0,0)',
-        line=dict(color='#4f5b66' if dark_mode else '#888', width=1)
+        line=dict(color='#c0c5ce' if dark_mode else '#555', width=1)
     )
 
 def create_empty_figure(message):
@@ -322,10 +322,19 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
     bg_color = '#2d3339' if dark_mode else '#ffffff'
     text_color = '#ffffff' if dark_mode else '#000000'
     
-    # Calculate padding and ranges
-    x_range = max(node_x) - min(node_x)
-    y_range = max(node_y) - min(node_y)
-    padding = 0.02
+    # Calculate padding and ranges, excluding outliers (like disconnected components)
+    # Filter out extreme outliers that might be from disconnected small components
+    import numpy as np
+    node_x_array = np.array(node_x)
+    node_y_array = np.array(node_y)
+    
+    # Use percentiles to exclude extreme outliers
+    x_min, x_max = np.percentile(node_x_array, [1, 99])
+    y_min, y_max = np.percentile(node_y_array, [1, 99])
+    
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    padding = 0.05  # Slightly increased padding for better visibility
     
     fig.update_layout(
         showlegend=True,
@@ -355,13 +364,13 @@ def update_figure_layout(fig, dark_mode, node_x, node_y):
             showgrid=False,
             zeroline=False,
             showticklabels=False,
-            range=[min(node_x) - x_range * padding, max(node_x) + x_range * padding]
+            range=[x_min - x_range * padding, x_max + x_range * padding]
         ),
         yaxis=dict(
             showgrid=False,
             zeroline=False,
             showticklabels=False,
-            range=[min(node_y) - y_range * padding, max(node_y) + y_range * padding]
+            range=[y_min - y_range * padding, y_max + y_range * padding]
         ),
         plot_bgcolor=bg_color,
         paper_bgcolor=bg_color,
@@ -463,6 +472,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
                 pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
             else:
                 pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+        
         else:
             # Second pass - arrange components in a grid, starting with largest component at top left
             current_x, current_y = 0, 0
@@ -519,6 +529,21 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         else:
             # Calculate layout
             pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+    
+    # Handle nodes that might be missing from position dictionary (small components when separate_components=True)
+    all_positioned_nodes = set(pos.keys())
+    all_graph_nodes = set(graph.nodes())
+    missing_nodes = all_graph_nodes - all_positioned_nodes
+    
+    if missing_nodes:
+        # Position the missing nodes from small components in a simple grid
+        import math
+        grid_size = math.ceil(math.sqrt(len(missing_nodes)))
+        for i, node in enumerate(missing_nodes):
+            row = i // grid_size
+            col = i % grid_size
+            # Place small components in bottom-right corner, out of the way
+            pos[node] = (100 + col * 0.5, -100 - row * 0.5)
     
     # Extract node information
     node_x, node_y = [], []
@@ -610,7 +635,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         # Add edges
         fig.add_trace(go.Scatter(
             x=edge_x, y=edge_y,
-            line=dict(width=1.5, color='#4f5b66' if dark_mode else '#888', shape=line_shape),
+            line=dict(width=1.5, color='#8fa1b3' if dark_mode else '#555', shape=line_shape),
             hoverinfo='text',
             hovertext=edge_texts,
             mode='lines',
@@ -623,7 +648,7 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
             showscale=False,
             color=node_colors,
             size=node_sizes,
-            line=dict(width=1, color='#4f5b66' if dark_mode else '#888'),
+            line=dict(width=1, color='#c0c5ce' if dark_mode else '#555'),
             symbol='circle'
         )
 
