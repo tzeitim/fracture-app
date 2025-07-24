@@ -527,29 +527,125 @@ def server(input, output, session):
             logger.error(f"Error in selection_count: {e}")
             return f"Error: {str(e)}"
     
+    def get_node_sequences_from_graph(node_ids):
+        """Extract sequences for given node IDs from the current graph"""
+        graph_path = current_graph_path.get()
+        if not graph_path or not Path(graph_path).exists():
+            return {}
+        
+        try:
+            import networkx as nx
+            from modules.visualization import parse_node_label
+            
+            graph = nx.drawing.nx_pydot.read_dot(graph_path)
+            node_sequences = {}
+            
+            for node_id in node_ids:
+                if node_id in graph.nodes():
+                    attrs = graph.nodes[node_id]
+                    label = attrs.get('label', '')
+                    if isinstance(label, str):
+                        label = label.strip('"').replace('\\\\n', '\n').replace('\\n', '\n')
+                        id_part, seq_part, cov_part = parse_node_label(label)
+                        if seq_part:
+                            node_sequences[node_id] = {
+                                'sequence': seq_part.strip(),
+                                'coverage': cov_part.strip() if cov_part else 'N/A'
+                            }
+            
+            return node_sequences
+        except Exception as e:
+            logger.error(f"Error extracting node sequences: {e}")
+            return {}
+
     @output
     @render.ui
     def selected_nodes_table():
-        """Display selected nodes as a table"""
+        """Display selected nodes with their sequences as a table"""
         try:
             current_nodes = clicked_nodes.get()
             if not current_nodes:
                 return ui.div(ui.p("No nodes selected", style="font-style: italic; color: #888;"))
             
-            # Create a simple table of selected nodes
+            # Get sequences for selected nodes
+            node_sequences = get_node_sequences_from_graph(current_nodes)
+            
+            # Get theme colors
+            theme = input.app_theme()
+            if theme == "latte":
+                bg_color = "#e6e9ef"
+                text_color = "#4c4f69"
+                secondary_text = "#6c6f85"
+                node_bg = "#dce0e8"
+                seq_bg = "#ccd0da"
+                border_color = "#1e66f5"
+                coverage_color = "#40a02b"
+            elif theme == "mocha":
+                bg_color = "#181825"
+                text_color = "#cdd6f4"
+                secondary_text = "#a6adc8"
+                node_bg = "#313244"
+                seq_bg = "#45475a"
+                border_color = "#cba6f7"
+                coverage_color = "#a6e3a1"
+            else:  # dark/slate theme
+                bg_color = "#444d56"
+                text_color = "#ffffff"
+                secondary_text = "#adb5bd"
+                node_bg = "#555e67"
+                seq_bg = "#6c757d"
+                border_color = "#007bff"
+                coverage_color = "#28a745"
+            
+            # Create enhanced table with sequences
             table_rows = []
             for i, node_id in enumerate(sorted(current_nodes), 1):
+                # Node ID row
                 table_rows.append(
                     ui.div(
-                        ui.span(f"{i}. ", style="font-weight: bold; color: #007bff;"),
-                        ui.span(node_id, style="font-family: monospace; background-color: #f8f9fa; padding: 2px 6px; border-radius: 3px;"),
+                        ui.span(f"{i}. ", style=f"font-weight: bold; color: {border_color};"),
+                        ui.span(f"Node: {node_id}", style=f"font-family: monospace; background-color: {node_bg}; color: {text_color}; padding: 2px 6px; border-radius: 3px; font-weight: bold;"),
                         style="margin: 3px 0; display: flex; align-items: center;"
                     )
                 )
+                
+                # Sequence and coverage info
+                if node_id in node_sequences:
+                    seq_info = node_sequences[node_id]
+                    sequence = seq_info['sequence']
+                    coverage = seq_info['coverage']
+                    
+                    # Format sequence as single line
+                    formatted_sequence = sequence
+                    
+                    table_rows.append(
+                        ui.div(
+                            ui.HTML(f"""
+                            <div style="margin-left: 20px; margin-bottom: 8px; color: {text_color};">
+                                <div style="margin-bottom: 4px;">
+                                    <strong>Coverage:</strong> <span style="color: {coverage_color};">{coverage}</span>
+                                </div>
+                                <div style="margin-bottom: 4px;">
+                                    <strong>Sequence:</strong> <span style="font-size: 11px; color: {secondary_text};">({len(sequence)} bp)</span>
+                                </div>
+                                <div style="font-family: monospace; background-color: {seq_bg}; color: {text_color}; padding: 8px; border-radius: 4px; word-wrap: break-word; font-size: 12px; line-height: 1.4; user-select: text; cursor: text;">
+                                    {formatted_sequence}
+                                </div>
+                            </div>
+                            """)
+                        )
+                    )
+                else:
+                    table_rows.append(
+                        ui.div(
+                            ui.span("No sequence data available", style=f"margin-left: 20px; font-style: italic; color: {secondary_text};"),
+                            style="margin: 3px 0;"
+                        )
+                    )
             
             return ui.div(
                 *table_rows,
-                style="background-color: #f8f9fa; padding: 10px; border-radius: 5px; border-left: 3px solid #007bff;"
+                style=f"background-color: {bg_color}; color: {text_color}; padding: 10px; border-radius: 5px; border-left: 3px solid {border_color}; max-height: 400px; overflow-y: auto;"
             )
         except Exception as e:
             logger.error(f"Error in selected_nodes_table: {e}")
@@ -1462,7 +1558,7 @@ def server(input, output, session):
                 components = list(nx.connected_components(graph.to_undirected()))
                 
                 # Filter out components smaller than min_component_size
-                filtered_components = [comp for comp in components if len(comp) >= min_component_size]
+                filtered_components = [comp for comp in components if len(comp) >= input.min_component_size()]
                 
                 # Sort components by size (largest first)
                 filtered_components.sort(key=len, reverse=True)
