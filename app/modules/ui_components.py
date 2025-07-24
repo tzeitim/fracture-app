@@ -2,6 +2,7 @@
 from shiny import ui
 from .config import SYSTEM_PREFIXES
 
+
 def create_data_input_sidebar(db=None, system_prefixes=None):
     """Create the data input sidebar panel"""
     if system_prefixes is None:
@@ -86,7 +87,8 @@ def create_data_input_sidebar(db=None, system_prefixes=None):
         ui.nav_panel("Graph",
             create_graph_source_controls(),
             create_node_selection_controls(),
-            create_graph_controls()
+            create_graph_safety_controls(),  
+            create_graph_controls_with_safety(),
         ),
     )
 
@@ -178,72 +180,6 @@ def create_graph_source_controls():
         ),
     )
 
-def create_graph_controls():
-    """Create the graph display control panel"""
-    return ui.panel_well(
-        ui.h4("Graph Display Options"),
-        ui.input_switch(
-            "use_weighted",
-            "Use Weighted Layout",
-            value=False
-            ),
-        ui.input_select(
-            "weight_method",
-            "Weight Calculation Method",
-            choices={
-                "nlog": "Negative Log Coverage",
-                "inverse": "Inverse Coverage"
-                },
-            selected="inverse"
-            ),
-        ui.hr(),
-        ui.h5("Layout Parameters"),
-        ui.input_switch(
-            "separate_components",
-            "Separate Disjoint Graphs",
-            value=False
-            ),
-        ui.input_numeric(
-            "component_padding",
-            "Component Spacing",
-            value=3.0,
-            min=0.5,
-            max=10.0,
-            step=0.5
-            ),
-        ui.input_numeric(
-            "min_component_size",
-            "Min Component Size",
-            value=1,
-            min=1,
-            max=20,
-            step=1
-            ),
-        ui.input_numeric(
-            "layout_k",
-            "Node Spacing (k)",
-            value=0.001,
-            min=0,
-            max=5.0,
-            step=0.001,
-            ),
-        ui.input_numeric(
-            "layout_iterations",
-            "Layout Iterations",
-            value=500,
-            min=10,
-            max=2000,
-            step=10
-            ),
-        ui.input_numeric(
-            "layout_scale",
-            "Layout Scale",
-            value=2.0,
-            min=0.5,
-            max=5.0,
-            step=0.5
-            ),
-    )
 
 def create_parameter_sweep_controls():
     """Create the parameter sweep control panel"""
@@ -350,3 +286,245 @@ def create_theme_controls():
             style="margin-top: 20px; font-style: italic;"
         )
     )
+
+
+# Addition to modules/ui_components.py
+
+def create_graph_safety_controls():
+    """Create controls for graph rendering safety mechanism"""
+    return ui.panel_well(
+        ui.h4("Large Graph Safety Controls"),
+        
+        # Node threshold slider
+        ui.input_slider(
+            "safety_node_threshold",
+            "Node Count Threshold:",
+            min=100,
+            max=10000,
+            value=1000,
+            step=100,
+            post=" nodes",
+            ticks=True
+        ),
+        
+        # Rendering mode selector
+        ui.input_radio_buttons(
+            "graph_render_mode",
+            "Rendering Mode:",
+            choices={
+                "auto": "Auto (Recommended)",
+                "full": "Full Interactive",
+                "simplified": "Simplified Interactive", 
+                "static": "Static (Fast)"
+            },
+            selected="auto"
+        ),
+        
+        # Show mode description
+        ui.panel_conditional(
+            "input.graph_render_mode === 'auto'",
+            ui.div(
+                ui.tags.i(className="bi bi-info-circle"),
+                " Automatically selects rendering mode based on graph size",
+                style="color: #6c757d; font-size: 0.9em; margin-top: 5px;"
+            )
+        ),
+        ui.panel_conditional(
+            "input.graph_render_mode === 'full'",
+            ui.div(
+                ui.tags.i(className="bi bi-exclamation-triangle"),
+                " Full interactivity - may be slow for large graphs",
+                style="color: #ffc107; font-size: 0.9em; margin-top: 5px;"
+            )
+        ),
+        ui.panel_conditional(
+            "input.graph_render_mode === 'simplified'",
+            ui.div(
+                ui.tags.i(className="bi bi-speedometer2"),
+                " Reduced features for better performance",
+                style="color: #17a2b8; font-size: 0.9em; margin-top: 5px;"
+            )
+        ),
+        ui.panel_conditional(
+            "input.graph_render_mode === 'static'",
+            ui.div(
+                ui.tags.i(className="bi bi-lightning"),
+                " Fastest rendering, no interactivity",
+                style="color: #28a745; font-size: 0.9em; margin-top: 5px;"
+            )
+        ),
+        
+        ui.hr(),
+        
+        # Advanced options (collapsible)
+        ui.input_switch(
+            "show_advanced_safety",
+            "Show Advanced Options",
+            value=False
+        ),
+        
+        ui.panel_conditional(
+            "input.show_advanced_safety === true",
+            ui.div(
+                ui.input_numeric(
+                    "static_sample_size",
+                    "Static Mode Sample Size:",
+                    value=1000,
+                    min=100,
+                    max=5000,
+                    step=100
+                ),
+                ui.p(
+                    "Number of nodes to sample when rendering very large graphs in static mode",
+                    style="font-size: 0.85em; color: #6c757d;"
+                ),
+                
+                ui.input_checkbox(
+                    "force_fast_layout",
+                    "Force fast layout algorithm",
+                    value=False
+                ),
+                ui.p(
+                    "Use circular layout instead of spring layout for graphs over 500 nodes",
+                    style="font-size: 0.85em; color: #6c757d;"
+                )
+            )
+        ),
+        
+        # Graph size indicator
+        ui.output_ui("graph_size_indicator")
+    )
+
+
+def create_graph_controls_with_safety():
+    """Create the enhanced graph display control panel with safety options"""
+    return ui.panel_well(
+        ui.h4("Graph Display Options"),
+        
+        # Add safety status at the top
+        ui.output_ui("safety_status"),
+        ui.hr(),
+        
+        ui.input_switch(
+            "use_weighted",
+            "Use Weighted Layout",
+            value=False
+        ),
+        ui.input_select(
+            "weight_method",
+            "Weight Calculation Method",
+            choices={
+                "nlog": "Negative Log Coverage",
+                "coverage": "Direct Coverage"
+            },
+            selected="nlog"
+        ),
+        
+        # Component controls with safety warning
+        ui.div(
+            ui.input_switch(
+                "separate_components",
+                "Position Disjoint Graphs Separately",
+                value=True
+            ),
+            ui.panel_conditional(
+                "output.is_large_graph === true",
+                ui.div(
+                    ui.tags.i(className="bi bi-exclamation-circle"),
+                    " Disabled for large graphs",
+                    style="color: #dc3545; font-size: 0.85em;"
+                )
+            )
+        ),
+        
+        ui.input_numeric(
+            "component_padding",
+            "Component Padding",
+            value=3.0,
+            min=0.5,
+            max=10.0,
+            step=0.5
+        ),
+        ui.input_numeric(
+            "min_component_size",
+            "Minimum Component Size to Display",
+            value=3,
+            min=1,
+            max=50
+        ),
+        
+        ui.hr(),
+        ui.h5("Spring Layout Parameters"),
+        ui.input_numeric(
+            "layout_k",
+            "Spring Constant (k)",
+            value=1.5,
+            min=0.1,
+            max=5.0,
+            step=0.1
+        ),
+        ui.input_numeric(
+            "layout_iterations", 
+            "Layout Iterations",
+            value=50,
+            min=10,
+            max=200,
+            step=10
+        ),
+        ui.input_numeric(
+            "layout_scale",
+            "Layout Scale",
+            value=2.0,
+            min=0.5,
+            max=10.0,
+            step=0.5
+        )
+    )
+
+
+# UI helper components for the main app
+
+def graph_size_indicator_ui(size_info):
+    """Create a visual indicator for graph size"""
+    node_count = size_info.get('node_count', 0)
+    edge_count = size_info.get('edge_count', 0)
+    
+    # Determine color based on size
+    if node_count > 5000:
+        color = "#dc3545"  # danger red
+        icon = "exclamation-triangle-fill"
+        status = "Very Large"
+    elif node_count > 1000:
+        color = "#ffc107"  # warning yellow
+        icon = "exclamation-circle-fill"
+        status = "Large"
+    else:
+        color = "#28a745"  # success green
+        icon = "check-circle-fill"
+        status = "Normal"
+    
+    return ui.div(
+        ui.h5("Graph Size", style="margin-bottom: 10px;"),
+        ui.div(
+            ui.tags.i(className=f"bi bi-{icon}", style=f"color: {color}; margin-right: 5px;"),
+            f"{status} Graph",
+            style=f"color: {color}; font-weight: bold;"
+        ),
+        ui.p(f"Nodes: {node_count:,}", style="margin: 5px 0;"),
+        ui.p(f"Edges: {edge_count:,}", style="margin: 5px 0;"),
+        style="background-color: #f8f9fa; padding: 10px; border-radius: 5px;"
+    )
+
+
+def safety_status_ui(size_info, render_mode):
+    """Create a status indicator for current safety mode"""
+    if size_info.get('requires_safety', False):
+        return ui.div(
+            ui.tags.i(className="bi bi-shield-check", style="color: #17a2b8; margin-right: 5px;"),
+            f"Safety mode active: {render_mode} rendering",
+            style="background-color: #d1ecf1; border: 1px solid #bee5eb; "
+                  "color: #0c5460; padding: 5px 10px; border-radius: 3px; "
+                  "font-size: 0.9em; margin-bottom: 10px;"
+        )
+    else:
+        return ui.div()  # Empty div when safety not needed

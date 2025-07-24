@@ -20,13 +20,15 @@ logger = logging.getLogger("fracture_app")
 from modules.config import SYSTEM_PREFIXES, DARK_TEMPLATE, LATTE_TEMPLATE, MOCHA_TEMPLATE
 from modules.data_loader import load_database, load_data
 from modules.data_processing import get_umis, get_selected_umi_stats, compute_coverage, assemble_umi, sweep_assembly_params
+from modules.graph_safety import GraphSafetyManager, create_safe_graph_widget
+
 from modules.visualization import (
     format_top_contigs_table, create_graph_plot, create_coverage_distribution_plot, 
     create_reads_per_umi_plot
 )
 from modules.ui_components import (
     create_data_input_sidebar, create_assembly_controls, 
-    create_graph_source_controls, create_graph_controls, 
+    create_graph_source_controls,
     create_parameter_sweep_controls, create_theme_controls
 )
 
@@ -187,6 +189,12 @@ def server(input, output, session):
     current_graph_path = reactive.Value(None)
     graph_source_type = reactive.Value("none")  # "assembly", "upload", or "none"
     
+    # Initialize safety manager as reactive value
+    safety_manager = reactive.Value(GraphSafetyManager(node_threshold=1000))
+    
+    # Track current graph size info
+    current_graph_size = reactive.Value({})
+    
     # Theme handling
     @reactive.Effect
     @reactive.event(input.app_theme)
@@ -202,6 +210,16 @@ def server(input, output, session):
         else:
             current_template.set(DARK_TEMPLATE)
             logger.debug("Theme set to slate (default)")
+
+    # Update safety manager when threshold changes
+    @reactive.Effect
+    @reactive.event(input.safety_node_threshold)
+    def update_safety_threshold():
+        safety_manager.set(GraphSafetyManager(
+            node_threshold=input.safety_node_threshold(),
+            edge_threshold=input.safety_node_threshold() * 5,  # Rough estimate
+            force_static_threshold=input.safety_node_threshold() * 5
+        ))
 
     # Update the dataset dropdown when system changes
     @reactive.Effect
@@ -296,6 +314,40 @@ def server(input, output, session):
         except Exception as e:
             logger.error(f"Error in selected_nodes_table: {e}")
             return ui.div(ui.p(f"Error: {str(e)}", style="color: red;"))
+    
+    # Reactive to check if graph is large
+    @output
+    @render.text
+    @reactive.event(current_graph_size)
+    def is_large_graph():
+        """Output for conditional UI elements"""
+        return current_graph_size.get().get('requires_safety', False)
+    
+    # Graph size indicator output
+    @output
+    @render.ui
+    @reactive.event(current_graph_size)
+    def graph_size_indicator():
+        """Show current graph size with visual indicator"""
+        size_info = current_graph_size.get()
+        if not size_info or 'node_count' not in size_info:
+            return ui.div()
+        
+        from modules.ui_components import graph_size_indicator_ui
+        return graph_size_indicator_ui(size_info)
+    
+    # Safety status output
+    @output
+    @render.ui
+    @reactive.event(current_graph_size, input.graph_render_mode)
+    def safety_status():
+        """Show current safety mode status"""
+        size_info = current_graph_size.get()
+        if not size_info:
+            return ui.div()
+            
+        from modules.ui_components import safety_status_ui
+        return safety_status_ui(size_info, size_info.get('rendering_mode', 'full'))
     
     @output
     @render.ui
@@ -1026,7 +1078,7 @@ def server(input, output, session):
         else:
             logger.info("DOT file cleared or None")
 
-    # Unified graph rendering function
+    # Update the unified_graph render function:
     @output
     @render_widget
     @reactive.event(
@@ -1042,10 +1094,14 @@ def server(input, output, session):
         input.layout_scale,
         input.selected_nodes,
         input.selected_sequences,
-        clicked_nodes
+        clicked_nodes,
+        input.graph_render_mode,  # Add safety controls
+        input.safety_node_threshold,
+        input.static_sample_size,
+        input.force_fast_layout
     )
     def unified_graph():
-        """Render the unified graph widget"""
+        """Render the unified graph widget with safety mechanism"""
         logger.info(f"Rendering unified graph - source: {graph_source_type.get()}, path: {current_graph_path.get()}")
         
         # Check if we have a graph to display
@@ -1066,111 +1122,94 @@ def server(input, output, session):
             return empty_fig
         
         try:
-            # Parse selected nodes and sequences
-            selected_nodes = None
-            selected_sequences = None
-            
-            # Get all selected nodes (from clicks and text input)
-            all_selected_nodes = set(clicked_nodes.get())
-            
-            if input.selected_nodes() and input.selected_nodes().strip():
-                text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
-                all_selected_nodes.update(text_nodes)
-            
-            if all_selected_nodes:
-                selected_nodes = list(all_selected_nodes)
-                logger.debug(f"Selected nodes: {selected_nodes}")
-            
-            if input.selected_sequences() and input.selected_sequences().strip():
-                selected_sequences = [seq.strip() for seq in input.selected_sequences().split(',') if seq.strip()]
-            
-            # Determine path nodes if this is from assembly
-            path_nodes = None
-            if graph_source_type.get() == "assembly" and path_results() is not None:
-                path_data = path_results()
-                if isinstance(path_data, list) and len(path_data) > 0:
-                    path_nodes = set()
-                    for path in path_data:
-                        if 'path' in path:
-                            path_nodes.update(path['path'])
-            
-            # Check if file exists
-            if not Path(graph_path).exists():
-                logger.warning(f"Graph file not found: {graph_path}")
-                error_fig = go.FigureWidget(layout=current_template()['layout'])
-                error_fig.update_layout(
-                    height=800,
-                    annotations=[dict(
-                        text=f"Graph file not found: {graph_path}",
-                        xref="paper", yref="paper",
-                        x=0.5, y=0.5,
-                        showarrow=False,
-                        font=dict(color='#ff0000', size=14)
-                    )]
-                )
-                return error_fig
-            
-            logger.info(f"Creating graph from file: {graph_path}")
-            
-            # Create the graph plot  
-            fig = create_graph_plot(
-                graph_path,
-                dark_mode=(input.app_theme() != "latte"),
-                weighted=input.use_weighted(),
-                weight_method=input.weight_method(),
-                separate_components=input.separate_components(),
-                component_padding=input.component_padding(),
-                min_component_size=input.min_component_size(),
-                selected_nodes=selected_nodes,
-                selected_sequences=selected_sequences,
-                path_nodes=path_nodes,
-                spring_args={
+            # Prepare visualization kwargs
+            viz_kwargs = {
+                'dark_mode': input.app_theme() != 'latte',
+                'line_shape': 'linear',
+                'graph_type': input.graph_type() if graph_source_type.get() == "assembly" else "uploaded",
+                'weighted': input.use_weighted(),
+                'weight_method': input.weight_method(),
+                'separate_components': input.separate_components() if not current_graph_size.get().get('requires_safety', False) else False,
+                'component_padding': input.component_padding(),
+                'min_component_size': input.min_component_size(),
+                'spring_args': {
                     'k': input.layout_k(),
                     'iterations': input.layout_iterations(),
                     'scale': input.layout_scale()
                 }
+            }
+            
+            # Add selection info if not in static mode
+            if input.graph_render_mode() != 'static':
+                # Parse selected nodes and sequences
+                all_selected_nodes = set(clicked_nodes.get())
+                
+                if input.selected_nodes() and input.selected_nodes().strip():
+                    text_nodes = [node.strip() for node in input.selected_nodes().split(',') if node.strip()]
+                    all_selected_nodes.update(text_nodes)
+                
+                if all_selected_nodes:
+                    viz_kwargs['selected_nodes'] = list(all_selected_nodes)
+                
+                if input.selected_sequences() and input.selected_sequences().strip():
+                    viz_kwargs['selected_sequences'] = [seq.strip() for seq in input.selected_sequences().split(',')]
+            
+            # Create graph with safety checks
+            fig, metadata = create_safe_graph_widget(
+                graph_path,
+                safety_manager.get(),
+                user_override=input.graph_render_mode(),
+                **viz_kwargs
             )
             
-            # Convert to FigureWidget for interactivity
-            fig_widget = go.FigureWidget(fig)
+            # Update current graph size info
+            current_graph_size.set(metadata)
             
-            # Add click handler
-            def on_node_click(trace, points, selector):
-                if not points.point_inds:
-                    return
+            # Convert to FigureWidget for interactivity (if not static)
+            if metadata.get('rendering_mode') != 'static':
+                fig_widget = go.FigureWidget(fig)
                 
-                point_ind = points.point_inds[0]
+                # Add click handler for non-static modes
+                if metadata.get('rendering_mode') == 'full':
+                    def on_node_click(trace, points, selector):
+                        if not points.point_inds:
+                            return
+                        
+                        point_ind = points.point_inds[0]
+                        
+                        if hasattr(trace, 'customdata') and trace.customdata is not None:
+                            node_id = str(trace.customdata[point_ind])
+                            logger.info(f"Graph node clicked: {node_id}")
+                            
+                            # Toggle selection
+                            current_selection = clicked_nodes.get().copy()
+                            
+                            if node_id in current_selection:
+                                current_selection.discard(node_id)
+                                ui.notification_show(f"Deselected: {node_id}", type="message", duration=1)
+                            else:
+                                current_selection.add(node_id)
+                                ui.notification_show(f"Selected: {node_id}", type="message", duration=1)
+                            
+                            clicked_nodes.set(current_selection)
+                            
+                            # Update text input
+                            if current_selection:
+                                ui.update_text("selected_nodes", value=", ".join(sorted(current_selection)))
+                            else:
+                                ui.update_text("selected_nodes", value="")
+                    
+                    # Attach click handler to nodes trace
+                    for trace in fig_widget.data:
+                        if hasattr(trace, 'name') and trace.name == 'nodes':
+                            trace.on_click(on_node_click)
+                            break
                 
-                if hasattr(trace, 'customdata') and trace.customdata is not None:
-                    node_id = str(trace.customdata[point_ind])
-                    logger.info(f"Graph node clicked: {node_id}")
-                    
-                    # Toggle selection
-                    current_selection = clicked_nodes.get().copy()
-                    
-                    if node_id in current_selection:
-                        current_selection.discard(node_id)
-                        ui.notification_show(f"Deselected: {node_id}", type="message", duration=1)
-                    else:
-                        current_selection.add(node_id)
-                        ui.notification_show(f"Selected: {node_id}", type="message", duration=1)
-                    
-                    clicked_nodes.set(current_selection)
-                    
-                    # Update text input
-                    if current_selection:
-                        ui.update_text("selected_nodes", value=", ".join(sorted(current_selection)))
-                    else:
-                        ui.update_text("selected_nodes", value="")
-            
-            # Attach click handler to nodes trace
-            for trace in fig_widget.data:
-                if hasattr(trace, 'name') and trace.name == 'nodes':
-                    trace.on_click(on_node_click)
-                    break
-            
-            return fig_widget
-            
+                return fig_widget
+            else:
+                # Return static figure as-is
+                return go.FigureWidget(fig)
+                
         except Exception as e:
             logger.error(f"Error creating graph: {e}")
             import traceback
