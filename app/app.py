@@ -186,6 +186,8 @@ def server(input, output, session):
     dataset = reactive.Value(None)
     current_template = reactive.Value(DARK_TEMPLATE)
     current_static_image = reactive.Value(None)
+    cached_positions = reactive.Value({})
+    layout_cache_key = reactive.Value(None)
 
     
     # Node selection state management
@@ -194,7 +196,171 @@ def server(input, output, session):
     # Unified graph state
     current_graph_path = reactive.Value(None)
     graph_source_type = reactive.Value("none")  # "assembly", "upload", or "none"
-    
+    ###
+    def get_optimized_layout(graph, use_weighted, weight_method, separate_components, 
+                            component_padding, min_component_size, spring_args):
+        """Calculate optimized layout for a graph, using caching when possible"""
+        # Create a cache key based on the graph and layout parameters
+        import hashlib
+        import networkx as nx
+        # Create a hash of the graph structure
+        graph_hash = hashlib.md5(str(list(graph.edges())).encode()).hexdigest()
+        
+        cache_key = (
+            graph_hash,
+            use_weighted,
+            weight_method if use_weighted else None,
+            separate_components,
+            component_padding if separate_components else None,
+            min_component_size if separate_components else None,
+            spring_args['k'],
+            spring_args['iterations'],
+            spring_args['scale']
+        )
+        
+        # Check if we have this layout cached
+        if layout_cache_key.get() == cache_key:
+            logger.info("Using cached graph layout")
+            return cached_positions.get()
+        
+        logger.info("Calculating new graph layout")
+        
+        # First try to extract positions from the DOT file
+        pos = extract_positions_from_dot(graph)
+        
+        # If we found positions for most nodes, use them
+        if len(pos) >= len(graph.nodes()) * 0.9:  # 90% or more nodes have positions
+            logger.info(f"Using positions from DOT file for {len(pos)} nodes")
+        else:
+            # Otherwise calculate positions based on graph size and parameters
+            node_count = len(graph.nodes())
+            logger.info(f"Calculating layout for {node_count} nodes")
+            
+            if input.separate_components():
+                # Identify connected components for separate layout
+                components = list(nx.connected_components(graph.to_undirected()))
+                
+                # Filter out components smaller than min_component_size
+                filtered_components = [comp for comp in components if len(comp) >= min_component_size]
+                
+                # Sort components by size (largest first)
+                filtered_components.sort(key=len, reverse=True)
+                
+                # Calculate layout for each component and place in a grid
+                pos = {}
+                
+                # First pass - calculate layouts and store info
+                component_info = []
+                for component in filtered_components:
+                    # Create subgraph for this component
+                    subgraph = graph.subgraph(component)
+                    
+                    # Calculate layout for this component - same as in your visualization code
+                    spring_args = {
+                        'k': input.layout_k(),
+                        'iterations': input.layout_iterations(),
+                        'scale': input.layout_scale()
+                    }
+                    
+                    if input.use_weighted():
+                        component_pos = nx.spring_layout(subgraph, weight='weight', **spring_args, seed=42)
+                    else:
+                        component_pos = nx.kamada_kawai_layout(subgraph.to_undirected(), scale=2.0)
+                    
+                    # Find bounding box
+                    min_x = min(p[0] for p in component_pos.values()) if component_pos else 0
+                    max_x = max(p[0] for p in component_pos.values()) if component_pos else 0
+                    min_y = min(p[1] for p in component_pos.values()) if component_pos else 0
+                    max_y = max(p[1] for p in component_pos.values()) if component_pos else 0
+                    width = max_x - min_x
+                    height = max_y - min_y
+                    
+                    # Use the same scale factor calculation
+                    import numpy as np
+                    scale_factor = np.sqrt(len(component)) / 2.0
+                    
+                    component_info.append({
+                        'component': component,
+                        'pos': component_pos,
+                        'width': width * scale_factor,
+                        'height': height * scale_factor,
+                        'scale_factor': scale_factor,
+                        'size': len(component)
+                    })
+                
+                # If no components meet the size requirement, revert to standard layout
+                if not filtered_components:
+                    if input.use_weighted():
+                        pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+                    else:
+                        pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=2.0)
+                else:
+                    # Second pass - arrange components in a grid, same as in your visualization code
+                    current_x, current_y = 0, 0
+                    max_height_in_row = 0
+                    row_components = 0
+                    padding = input.component_padding()
+                    max_components_per_row = 3  # Adjust based on your needs
+                    
+                    for info in component_info:
+                        # If we've reached the max components per row, move to next row
+                        if row_components >= max_components_per_row:
+                            current_x = 0
+                            current_y += max_height_in_row + padding
+                            max_height_in_row = 0
+                            row_components = 0
+                        
+                        # Position this component
+                        for node, node_pos in info['pos'].items():
+                            # Scale and shift the position
+                            pos[node] = (
+                                node_pos[0] * info['scale_factor'] + current_x,
+                                node_pos[1] * info['scale_factor'] + current_y
+                            )
+                        
+                        # Update position for next component
+                        current_x += info['width'] + padding
+                        max_height_in_row = max(max_height_in_row, info['height'])
+                        row_components += 1
+                # Implement the separate component layout logic
+                # (Similar to your existing code)
+                # ...
+            else:
+                # Choose layout algorithm based on graph size
+                if node_count > 5000:
+                    logger.info("Using simple circular layout for very large graph")
+                    pos = nx.circular_layout(graph)
+                elif node_count > 1000:
+                    logger.info("Using spectral layout for large graph")
+                    pos = nx.spectral_layout(graph)
+                elif use_weighted:
+                    logger.info("Using spring layout with weights")
+                    pos = nx.spring_layout(graph, weight='weight', **spring_args, seed=42)
+                else:
+                    logger.info("Using kamada_kawai layout")
+                    pos = nx.kamada_kawai_layout(graph.to_undirected(), scale=spring_args['scale'])
+        
+        # Cache the calculated positions
+        cached_positions.set(pos)
+        layout_cache_key.set(cache_key)
+        
+        return pos
+
+    # Helper function to extract positions from DOT file
+    def extract_positions_from_dot(graph):
+        """Extract position information from the DOT file if available"""
+        pos = {}
+        for node, attrs in graph.nodes(data=True):
+            # Check if position is defined in DOT
+            if 'pos' in attrs:
+                try:
+                    # Parse position string (format is "x,y")
+                    pos_str = attrs['pos'].strip('"')
+                    x, y = map(float, pos_str.split(','))
+                    pos[node] = (x, y)
+                except (ValueError, AttributeError):
+                    pass
+        return pos
     # Theme handling
     @reactive.Effect
     @reactive.event(input.app_theme)
@@ -1575,4 +1741,12 @@ def get_central_graph_path():
     # Ensure directory exists
     central_path.parent.mkdir(exist_ok=True, parents=True)
     return central_path
+
+
+
+
+
+
+
+
 app = App(app_ui, server)
