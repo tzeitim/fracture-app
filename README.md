@@ -45,10 +45,43 @@ app/
 To run the application, execute:
 
 ```bash
-./app/run.app
+python app/run.app
 ```
 
 The app will be available at http://localhost:8000 by default.
+
+### Command-Line Arguments
+
+The application supports several optional command-line arguments:
+
+```bash
+python app/run.app [OPTIONS]
+```
+
+**Options:**
+
+- `--port PORT` - Port to run the server on (default: 8000)
+- `--start_anchor SEQUENCE` - Default sequence for Start Anchor/5' end (default: GAGACTGCATGG)
+- `--end_anchor SEQUENCE` - Default sequence for End Anchor/3' end (default: TTTAGTGAGGGT)
+- `--umi UMI_ID` - Default UMI to select when data is loaded (optional)
+
+**Examples:**
+
+```bash
+# Run with custom anchors
+python app/run.app --start_anchor GTGAGCAGTTTTAG --end_anchor CCCTTTAGTGAGGGT
+
+# Run with a specific UMI pre-selected
+python app/run.app --umi AAACGGTT
+
+# Run on a different port with custom settings
+python app/run.app --port 8080 --start_anchor GTGAGCAGTTTTAG --umi AAACGGTT
+
+# View all options
+python app/run.app --help
+```
+
+For detailed usage instructions, see [USER_MANUAL.md](USER_MANUAL.md).
 
 ## Requirements
 
