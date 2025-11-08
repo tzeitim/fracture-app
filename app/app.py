@@ -1620,12 +1620,12 @@ def server(input, output, session):
                     )
         else:
             # Using interactive widget
-            return ui.div(output_widget("unified_graph"), style="height: 800px;")
+            return ui.div(output_widget("unified_graph"), style=f"height: {input.graph_height()}px;")
         ####
 
     @reactive.Effect
     @reactive.event(
-        current_graph_path, 
+        current_graph_path,
         input.app_theme,
         input.use_weighted,
         input.weight_method,
@@ -1637,7 +1637,8 @@ def server(input, output, session):
         input.layout_scale,
         input.layout_algorithm,
         input.use_static_image,
-        input.show_node_labels
+        input.show_node_labels,
+        input.graph_height
     )
     def generate_static_graph():
         """Generate a static PNG image of the graph preserving NetworkX layout"""
@@ -1782,7 +1783,12 @@ def server(input, output, session):
 
 
             # Create figure with appropriate styling
-            plt.figure(figsize=(12, 8), dpi=150)
+            # Calculate height in inches based on pixel height and DPI
+            dpi = 150
+            height_inches = input.graph_height() / dpi
+            # Maintain aspect ratio (12:8 = 1.5:1)
+            width_inches = height_inches * 1.5
+            plt.figure(figsize=(width_inches, height_inches), dpi=dpi)
             
             # Set theme colors
             dark_mode = (input.app_theme() != "latte")
@@ -1909,7 +1915,7 @@ def server(input, output, session):
     @output
     @render_widget
     @reactive.event(
-        current_graph_path, 
+        current_graph_path,
         input.app_theme,
         input.use_weighted,
         input.weight_method,
@@ -1920,7 +1926,8 @@ def server(input, output, session):
         input.layout_iterations,
         input.layout_scale,
         input.layout_algorithm,
-        input.use_static_image  # Add this dependency
+        input.use_static_image,  # Add this dependency
+        input.graph_height
     )
     def unified_graph():
         """Render the unified graph widget"""
@@ -1948,7 +1955,7 @@ def server(input, output, session):
             current_fig_widget.set(None)
             empty_fig = go.FigureWidget(layout=current_template()['layout'])
             empty_fig.update_layout(
-                height=800,
+                height=input.graph_height(),
                 autosize=True,
                 annotations=[dict(
                     text="Generate a graph from assembly or upload a DOT file",
@@ -1982,7 +1989,7 @@ def server(input, output, session):
                 current_fig_widget.set(None)
                 error_fig = go.FigureWidget(layout=current_template()['layout'])
                 error_fig.update_layout(
-                    height=800,
+                    height=input.graph_height(),
                     annotations=[dict(
                         text=f"Graph file not found: {graph_path}",
                         xref="paper", yref="paper",
@@ -2017,7 +2024,10 @@ def server(input, output, session):
             
             # Convert to FigureWidget for interactivity
             fig_widget = go.FigureWidget(fig)
-            
+
+            # Set the height based on user input
+            fig_widget.update_layout(height=input.graph_height())
+
             # Add click handler
             def on_node_click(trace, points, selector):
                 if not points.point_inds:

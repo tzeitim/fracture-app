@@ -277,6 +277,14 @@ def create_graph_controls():
             max=5.0,
             step=0.5
             ),
+        ui.input_numeric(
+            "graph_height",
+            "Graph Height (px)",
+            value=1600,
+            min=400,
+            max=3000,
+            step=100
+            ),
     )
 
 def create_parameter_sweep_controls():
