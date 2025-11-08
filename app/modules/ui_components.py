@@ -90,8 +90,13 @@ def create_data_input_sidebar(db=None, system_prefixes=None):
         ),
     )
 
-def create_assembly_controls():
-    """Create the assembly control panel"""
+def create_assembly_controls(start_anchor_default="GAGACTGCATGG", end_anchor_default="TTTAGTGAGGGT"):
+    """Create the assembly control panel
+
+    Args:
+        start_anchor_default (str): Default value for Start Anchor input
+        end_anchor_default (str): Default value for End Anchor input
+    """
     return ui.panel_well(
         ui.input_radio_buttons(
             "assembly_method",
@@ -108,8 +113,8 @@ def create_assembly_controls():
             class_="btn-primary"
             ),
 
-        ui.input_text("start_anchor", "Start Anchor", value="GAGACTGCATGG", placeholder="Sequence at the 5' end"),
-        ui.input_text("end_anchor", "End Anchor", value="TTTAGTGAGGGT", placeholder="Sequence at the 3' end"),
+        ui.input_text("start_anchor", "Start Anchor", value=start_anchor_default, placeholder="Sequence at the 5' end"),
+        ui.input_text("end_anchor", "End Anchor", value=end_anchor_default, placeholder="Sequence at the 3' end"),
         ui.input_selectize(
             "umi", 
             "Select UMI",

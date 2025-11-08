@@ -43,6 +43,15 @@ os.environ['OMP_NUM_THREADS'] = '4'
 # Configure polars for pretty printing
 pl.Config().set_fmt_str_lengths(666)
 
+# Read configuration from environment variables (set by run.app)
+# These can be customized via command-line arguments to run.app
+class AppConfig:
+    start_anchor = os.environ.get("FRACTURE_START_ANCHOR", "GAGACTGCATGG")
+    end_anchor = os.environ.get("FRACTURE_END_ANCHOR", "TTTAGTGAGGGT")
+    default_umi = os.environ.get("FRACTURE_DEFAULT_UMI", None)
+
+config = AppConfig()
+
 # Load database from file
 try:
     db = load_database('../parquet_db.txt')
@@ -125,7 +134,10 @@ app_ui = ui.page_fluid(
                 ),
                 ui.row(
                     ui.column(3,
-                        create_assembly_controls()
+                        create_assembly_controls(
+                            start_anchor_default=config.start_anchor,
+                            end_anchor_default=config.end_anchor
+                        )
                     ),
                     ui.column(4,
                         ui.panel_well(
@@ -893,10 +905,23 @@ def server(input, output, session):
             umis = get_umis(df)
             logger.info(f"Found {len(umis)} UMIs")
             ui.notification_show(f"Found {len(umis)} UMIs")
+
+            # Determine which UMI to select by default
+            selected_umi = None
+            if umis:
+                # Use config default if specified and available, otherwise use first UMI
+                if config.default_umi and config.default_umi in umis:
+                    selected_umi = config.default_umi
+                    logger.info(f"Selecting configured default UMI: {selected_umi}")
+                else:
+                    selected_umi = umis[0]
+                    if config.default_umi:
+                        logger.warning(f"Configured UMI '{config.default_umi}' not found in data, using first UMI: {selected_umi}")
+
             ui.update_selectize(
                 "umi",
                 choices=umis,
-                selected=umis[0] if umis else None
+                selected=selected_umi
             )
 
         except Exception as e:
