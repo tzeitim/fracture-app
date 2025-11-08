@@ -398,12 +398,13 @@ def get_layout_algorithm(algorithm_name, graph, spring_args, weighted=False):
         # Default fallback
         return nx.fruchterman_reingold_layout(graph, k=spring_args.get('k'), iterations=spring_args.get('iterations', 50), seed=42)
 
-def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed', 
-                      debug=False, path_nodes=None, weighted=False, weight_method='nlog', 
+def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type='compressed',
+                      debug=False, path_nodes=None, weighted=False, weight_method='nlog',
                       separate_components=False, component_padding=3.0, min_component_size=3, spring_args=None,
-                      selected_nodes=None, selected_sequences=None, precalculated_positions=None, layout_algorithm="fruchterman_reingold"):
+                      selected_nodes=None, selected_sequences=None, precalculated_positions=None, layout_algorithm="fruchterman_reingold",
+                      start_anchor=None, end_anchor=None):
     """Create an interactive plot of the assembly graph.
-    
+
     Args:
         dot_path (str): Path to the DOT file
         dark_mode (bool): Whether to use dark theme colors
@@ -416,12 +417,23 @@ def create_graph_plot(dot_path, dark_mode=True, line_shape='linear', graph_type=
         min_component_size (int): Minimum size of a component to be included in the plot
         selected_nodes (list/set): Node IDs that should be highlighted with selection styling
         selected_sequences (list/set): Sequences that should be highlighted with selection styling
+        start_anchor (str): Start anchor sequence to highlight (optional)
+        end_anchor (str): End anchor sequence to highlight (optional)
     """
     if spring_args is None:
-        spring_args = {'k': 1.5, 'iterations': 50, 'scale': 2.0} 
+        spring_args = {'k': 1.5, 'iterations': 50, 'scale': 2.0}
 
-    # Define sequences and their colors
-    sequence_colors = SEQUENCE_COLORS
+    # Build sequence colors dictionary dynamically from anchor parameters
+    # Fall back to SEQUENCE_COLORS if anchors not provided
+    sequence_colors = {}
+    if start_anchor:
+        sequence_colors[start_anchor] = '#50C878'  # Emerald green
+    if end_anchor:
+        sequence_colors[end_anchor] = '#9370DB'  # Medium purple
+
+    # If no anchors provided, use default hardcoded values
+    if not sequence_colors:
+        sequence_colors = SEQUENCE_COLORS
     
     try:
         graph = nx.drawing.nx_pydot.read_dot(dot_path)

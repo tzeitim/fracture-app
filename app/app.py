@@ -2044,7 +2044,9 @@ def server(input, output, session):
                     'k': input.layout_k(),
                     'iterations': input.layout_iterations(),
                     'scale': input.layout_scale()
-                }
+                },
+                start_anchor=input.start_anchor(),
+                end_anchor=input.end_anchor()
             )
             
             # Convert to FigureWidget for interactivity
