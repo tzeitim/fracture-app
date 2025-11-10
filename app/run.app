@@ -22,12 +22,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='FRACTURE Explorer - Assembly graph visualization')
     parser.add_argument('--port', type=int, default=None,
                         help='Port to run the server on (default: 8000 or PORT env var)')
+    parser.add_argument('--file_path', type=str, default=None,
+                        help='Path to parquet file to load automatically (optional)')
     parser.add_argument('--start_anchor', type=str, default="GAGACTGCATGG",
                         help='Default sequence for Start Anchor (5\' end)')
     parser.add_argument('--end_anchor', type=str, default="TTTAGTGAGGGT",
                         help='Default sequence for End Anchor (3\' end)')
     parser.add_argument('--umi', type=str, default=None,
                         help='Default UMI to select (optional)')
+    parser.add_argument('--assembly_method', type=str, default="shortest_path",
+                        choices=['compression', 'shortest_path'],
+                        help='Assembly method (default: shortest_path)')
+    parser.add_argument('--min_coverage', type=int, default=5,
+                        help='Minimum coverage threshold (default: 5)')
+    parser.add_argument('--kmer_size', type=int, default=10,
+                        help='K-mer size for assembly (default: 10)')
+    parser.add_argument('--auto_k', action='store_true',
+                        help='Enable automatic k-mer size selection')
     args = parser.parse_args()
 
     # Add script directory to path to ensure imports work
@@ -55,13 +66,25 @@ if __name__ == "__main__":
         os.environ["FRACTURE_APP_PORT"] = str(port)
         os.environ["FRACTURE_START_ANCHOR"] = args.start_anchor
         os.environ["FRACTURE_END_ANCHOR"] = args.end_anchor
+        os.environ["FRACTURE_ASSEMBLY_METHOD"] = args.assembly_method
+        os.environ["FRACTURE_MIN_COVERAGE"] = str(args.min_coverage)
+        os.environ["FRACTURE_KMER_SIZE"] = str(args.kmer_size)
+        os.environ["FRACTURE_AUTO_K"] = str(args.auto_k)
         if args.umi:
             os.environ["FRACTURE_DEFAULT_UMI"] = args.umi
+        if args.file_path:
+            os.environ["FRACTURE_FILE_PATH"] = args.file_path
 
         logger.info(f"Using Start Anchor: {args.start_anchor}")
         logger.info(f"Using End Anchor: {args.end_anchor}")
+        logger.info(f"Assembly Method: {args.assembly_method}")
+        logger.info(f"Min Coverage: {args.min_coverage}")
+        logger.info(f"K-mer Size: {args.kmer_size}")
+        logger.info(f"Auto K-mer: {args.auto_k}")
         if args.umi:
             logger.info(f"Using Default UMI: {args.umi}")
+        if args.file_path:
+            logger.info(f"Using File Path: {args.file_path}")
 
         # Log server URLs with correct port - show immediately at startup
         import socket

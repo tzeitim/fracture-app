@@ -2,14 +2,21 @@
 from shiny import ui
 from .config import SYSTEM_PREFIXES
 
-def create_data_input_sidebar(db=None, system_prefixes=None):
-    """Create the data input sidebar panel"""
+def create_data_input_sidebar(db=None, system_prefixes=None, provided_umi_default="", file_path_default="jijo.parquet"):
+    """Create the data input sidebar panel
+
+    Args:
+        db: Database dictionary (optional)
+        system_prefixes: System prefix dictionary (optional)
+        provided_umi_default: Default value for provided UMI input (optional)
+        file_path_default: Default value for local file path (optional)
+    """
     if system_prefixes is None:
         system_prefixes = SYSTEM_PREFIXES
-    
+
     if db is None:
         db = {}
-        
+
     return ui.navset_tab(
         ui.nav_panel("Data",
             ui.input_numeric("insert_size", "Lineage reporter reference length (bp)", value=450),
@@ -20,7 +27,7 @@ def create_data_input_sidebar(db=None, system_prefixes=None):
                 value=True
                 ),
             ui.input_numeric("sample_min_reads", "Minimum number of reads per umi", value=100),
-            ui.input_text("provided_umi", "Provided UMI (optional)", value="", placeholder="Enter specific UMI to load"),
+            ui.input_text("provided_umi", "Provided UMI (optional)", value=provided_umi_default, placeholder="Enter specific UMI to load"),
             
             # Coverage Plot Controls
             ui.input_checkbox(
@@ -70,7 +77,7 @@ def create_data_input_sidebar(db=None, system_prefixes=None):
 
             ui.panel_conditional(
                 "input.input_type === 'local'",
-                ui.input_text("parquet_file_local", "Local Parquet File", value='jijo.parquet')
+                ui.input_text("parquet_file_local", "Local Parquet File", value=file_path_default)
                 ),
         ),
         ui.nav_panel("Hall of Fame",
@@ -90,12 +97,18 @@ def create_data_input_sidebar(db=None, system_prefixes=None):
         ),
     )
 
-def create_assembly_controls(start_anchor_default="GAGACTGCATGG", end_anchor_default="TTTAGTGAGGGT"):
+def create_assembly_controls(start_anchor_default="GAGACTGCATGG", end_anchor_default="TTTAGTGAGGGT",
+                            assembly_method_default="shortest_path", min_coverage_default=5,
+                            kmer_size_default=10, auto_k_default=False):
     """Create the assembly control panel
 
     Args:
         start_anchor_default (str): Default value for Start Anchor input
         end_anchor_default (str): Default value for End Anchor input
+        assembly_method_default (str): Default assembly method ('compression' or 'shortest_path')
+        min_coverage_default (int): Default minimum coverage value
+        kmer_size_default (int): Default k-mer size
+        auto_k_default (bool): Default auto k-mer setting
     """
     return ui.panel_well(
         ui.input_radio_buttons(
@@ -105,7 +118,7 @@ def create_assembly_controls(start_anchor_default="GAGACTGCATGG", end_anchor_def
                 "compression": "Graph Compression",
                 "shortest_path": "Shortest Path"
                 },
-            selected="shortest_path"
+            selected=assembly_method_default
             ),
         ui.input_action_button(
             "assemble",
@@ -116,24 +129,24 @@ def create_assembly_controls(start_anchor_default="GAGACTGCATGG", end_anchor_def
         ui.input_text("start_anchor", "Start Anchor", value=start_anchor_default, placeholder="Sequence at the 5' end"),
         ui.input_text("end_anchor", "End Anchor", value=end_anchor_default, placeholder="Sequence at the 3' end"),
         ui.input_selectize(
-            "umi", 
+            "umi",
             "Select UMI",
             choices=[]
             ),
         ui.input_numeric(
             "min_coverage",
             "Minimum Coverage",
-            value=5,
+            value=min_coverage_default,
             ),
         ui.input_numeric(
-            "kmer_size", 
-            "K-mer Size", 
-            value=10,
+            "kmer_size",
+            "K-mer Size",
+            value=kmer_size_default,
             ),
         ui.input_checkbox(
             "auto_k",
             "Auto K-mer Size",
-            value=False
+            value=auto_k_default
             ),
     )
 
@@ -285,9 +298,17 @@ def create_graph_controls():
         ui.input_numeric(
             "graph_height",
             "Graph Height (px)",
-            value=1600,
+            value=1200,
             min=400,
             max=3000,
+            step=100
+            ),
+        ui.input_numeric(
+            "graph_width",
+            "Graph Width (px)",
+            value=1600,
+            min=600,
+            max=4000,
             step=100
             ),
     )

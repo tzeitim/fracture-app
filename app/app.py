@@ -49,6 +49,11 @@ class AppConfig:
     start_anchor = os.environ.get("FRACTURE_START_ANCHOR", "GAGACTGCATGG")
     end_anchor = os.environ.get("FRACTURE_END_ANCHOR", "TTTAGTGAGGGT")
     default_umi = os.environ.get("FRACTURE_DEFAULT_UMI", None)
+    assembly_method = os.environ.get("FRACTURE_ASSEMBLY_METHOD", "shortest_path")
+    min_coverage = int(os.environ.get("FRACTURE_MIN_COVERAGE", "5"))
+    kmer_size = int(os.environ.get("FRACTURE_KMER_SIZE", "10"))
+    auto_k = os.environ.get("FRACTURE_AUTO_K", "False").lower() in ('true', '1', 't', 'yes')
+    file_path = os.environ.get("FRACTURE_FILE_PATH", None)
 
 config = AppConfig()
 
@@ -79,7 +84,11 @@ app_ui = ui.page_fluid(
     ui.layout_sidebar(
         # Sidebar panel
         ui.sidebar(
-            create_data_input_sidebar(db=db),
+            create_data_input_sidebar(
+                db=db,
+                provided_umi_default=config.default_umi or "",
+                file_path_default=config.file_path or "jijo.parquet"
+            ),
             width=350,
         ),
 
@@ -136,7 +145,11 @@ app_ui = ui.page_fluid(
                     ui.column(3,
                         create_assembly_controls(
                             start_anchor_default=config.start_anchor,
-                            end_anchor_default=config.end_anchor
+                            end_anchor_default=config.end_anchor,
+                            assembly_method_default=config.assembly_method,
+                            min_coverage_default=config.min_coverage,
+                            kmer_size_default=config.kmer_size,
+                            auto_k_default=config.auto_k
                         )
                     ),
                     ui.column(4,
