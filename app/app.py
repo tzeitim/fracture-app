@@ -1046,42 +1046,53 @@ def server(input, output, session):
             ui.notification_show(error_msg, type="error")
 
     def trigger_tab_animation():
-        """Trigger the Graph Explorer tab animation to guide user attention"""
+        """Trigger the Graph Explorer tab and Graph sidebar tab animation to guide user attention"""
         try:
             # Use JavaScript injection instead of custom message
             js_code = """
             $(document).ready(function() {
-                // Find the Graph Explorer tab
+                // Find all tab links
                 var tabLinks = $('a[data-bs-toggle="tab"], a[data-toggle="tab"]');
-                var targetTab = null;
-                
+                var graphExplorerTab = null;
+                var graphSidebarTab = null;
+
+                // Find both the Graph Explorer main tab and Graph sidebar tab
                 tabLinks.each(function() {
-                    if ($(this).text().trim() === 'Graph Explorer') {
-                        targetTab = $(this);
-                        return false;
+                    var tabText = $(this).text().trim();
+                    if (tabText === 'Graph Explorer') {
+                        graphExplorerTab = $(this);
+                    } else if (tabText === 'Graph') {
+                        graphSidebarTab = $(this);
                     }
                 });
-                
-                if (targetTab) {
-                    console.log('Found Graph Explorer tab, applying animation');
-                    
-                    // Add the animation class
-                    targetTab.addClass('tab-attention');
-                    
-                    // Remove animation after 6 seconds
-                    setTimeout(function() {
-                        targetTab.removeClass('tab-attention');
-                        console.log('Animation removed from tab');
-                    }, 6000);
-                    
-                    // Also remove animation if user clicks the tab
-                    targetTab.one('click', function() {
-                        $(this).removeClass('tab-attention');
-                        console.log('Animation removed due to tab click');
-                    });
-                } else {
-                    console.log('Graph Explorer tab not found');
+
+                // Function to apply animation to a tab
+                function animateTab(tab, tabName) {
+                    if (tab) {
+                        console.log('Found ' + tabName + ' tab, applying animation');
+
+                        // Add the animation class
+                        tab.addClass('tab-attention');
+
+                        // Remove animation after 6 seconds
+                        setTimeout(function() {
+                            tab.removeClass('tab-attention');
+                            console.log('Animation removed from ' + tabName + ' tab');
+                        }, 6000);
+
+                        // Also remove animation if user clicks the tab
+                        tab.one('click', function() {
+                            $(this).removeClass('tab-attention');
+                            console.log('Animation removed from ' + tabName + ' tab due to click');
+                        });
+                    } else {
+                        console.log(tabName + ' tab not found');
+                    }
                 }
+
+                // Apply animation to both tabs
+                animateTab(graphExplorerTab, 'Graph Explorer');
+                animateTab(graphSidebarTab, 'Graph (sidebar)');
             });
             """
             
@@ -1658,7 +1669,7 @@ def server(input, output, session):
                     )
         else:
             # Using interactive widget
-            return ui.div(output_widget("unified_graph"), style=f"height: {input.graph_height()}px;")
+            return ui.div(output_widget("unified_graph"), style=f"height: {input.graph_height()}px; width: {input.graph_width()}px;")
         ####
 
     @reactive.Effect
@@ -1676,7 +1687,8 @@ def server(input, output, session):
         input.layout_algorithm,
         input.use_static_image,
         input.show_node_labels,
-        input.graph_height
+        input.graph_height,
+        input.graph_width
     )
     def generate_static_graph():
         """Generate a static PNG image of the graph preserving NetworkX layout"""
@@ -1821,11 +1833,10 @@ def server(input, output, session):
 
 
             # Create figure with appropriate styling
-            # Calculate height in inches based on pixel height and DPI
+            # Calculate dimensions in inches based on pixel dimensions and DPI
             dpi = 150
             height_inches = input.graph_height() / dpi
-            # Maintain aspect ratio (12:8 = 1.5:1)
-            width_inches = height_inches * 1.5
+            width_inches = input.graph_width() / dpi
             plt.figure(figsize=(width_inches, height_inches), dpi=dpi)
             
             # Set theme colors
@@ -1965,7 +1976,8 @@ def server(input, output, session):
         input.layout_scale,
         input.layout_algorithm,
         input.use_static_image,  # Add this dependency
-        input.graph_height
+        input.graph_height,
+        input.graph_width
     )
     def unified_graph():
         """Render the unified graph widget"""
@@ -1994,6 +2006,7 @@ def server(input, output, session):
             empty_fig = go.FigureWidget(layout=current_template()['layout'])
             empty_fig.update_layout(
                 height=input.graph_height(),
+                width=input.graph_width(),
                 autosize=True,
                 annotations=[dict(
                     text="Generate a graph from assembly or upload a DOT file",
@@ -2028,6 +2041,7 @@ def server(input, output, session):
                 error_fig = go.FigureWidget(layout=current_template()['layout'])
                 error_fig.update_layout(
                     height=input.graph_height(),
+                    width=input.graph_width(),
                     annotations=[dict(
                         text=f"Graph file not found: {graph_path}",
                         xref="paper", yref="paper",
@@ -2065,8 +2079,8 @@ def server(input, output, session):
             # Convert to FigureWidget for interactivity
             fig_widget = go.FigureWidget(fig)
 
-            # Set the height based on user input
-            fig_widget.update_layout(height=input.graph_height())
+            # Set the dimensions based on user input
+            fig_widget.update_layout(height=input.graph_height(), width=input.graph_width())
 
             # Add click handler
             def on_node_click(trace, points, selector):
