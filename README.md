@@ -61,21 +61,39 @@ python app/run.app [OPTIONS]
 **Options:**
 
 - `--port PORT` - Port to run the server on (default: 8000)
+- `--file_path PATH` - Path to parquet file to load automatically (optional)
 - `--start_anchor SEQUENCE` - Default sequence for Start Anchor/5' end (default: GAGACTGCATGG)
 - `--end_anchor SEQUENCE` - Default sequence for End Anchor/3' end (default: TTTAGTGAGGGT)
 - `--umi UMI_ID` - Default UMI to select when data is loaded (optional)
+- `--assembly_method METHOD` - Assembly method: compression or shortest_path (default: shortest_path)
+- `--min_coverage N` - Minimum coverage threshold (default: 5)
+- `--kmer_size N` - K-mer size for assembly (default: 10)
+- `--auto_k` - Enable automatic k-mer size selection (flag)
 
 **Examples:**
 
 ```bash
+# Run with a specific file (skips manual upload)
+python app/run.app --file_path /path/to/data/parsed_reads.parquet
+
 # Run with custom anchors
 python app/run.app --start_anchor GTGAGCAGTTTTAG --end_anchor CCCTTTAGTGAGGGT
 
-# Run with a specific UMI pre-selected
-python app/run.app --umi AAACGGTT
+# Run with file and specific UMI pre-selected
+python app/run.app --file_path data.parquet --umi AAACGGTT
 
-# Run on a different port with custom settings
-python app/run.app --port 8080 --start_anchor GTGAGCAGTTTTAG --umi AAACGGTT
+# Run with custom assembly parameters
+python app/run.app --assembly_method compression --min_coverage 10 --kmer_size 15
+
+# Run with auto k-mer size enabled
+python app/run.app --auto_k
+
+# Complete workflow setup
+python app/run.app --port 8080 \
+  --file_path /data/experiment1/parsed_reads.parquet \
+  --start_anchor GTGAGCAGTTTTAG \
+  --umi AAACGGTT \
+  --min_coverage 8
 
 # View all options
 python app/run.app --help

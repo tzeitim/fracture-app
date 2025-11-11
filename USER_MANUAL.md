@@ -355,9 +355,14 @@ python app/run.app [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--port` | integer | 8000 | Port number for the web server |
+| `--file_path` | string | None | Path to parquet file to load automatically |
 | `--start_anchor` | string | GAGACTGCATGG | Default Start Anchor sequence (5' end) |
 | `--end_anchor` | string | TTTAGTGAGGGT | Default End Anchor sequence (3' end) |
 | `--umi` | string | None | Default UMI to select when data loads |
+| `--assembly_method` | string | shortest_path | Assembly method: compression or shortest_path |
+| `--min_coverage` | integer | 5 | Minimum coverage threshold for assembly |
+| `--kmer_size` | integer | 10 | K-mer size for assembly |
+| `--auto_k` | flag | False | Enable automatic k-mer size selection |
 
 ### Examples
 
@@ -371,6 +376,11 @@ python app/run.app
 python app/run.app --port 8080
 ```
 
+**Load a specific file (skips manual upload):**
+```bash
+python app/run.app --file_path /path/to/data/parsed_reads.parquet
+```
+
 **Custom anchor sequences:**
 ```bash
 python app/run.app --start_anchor GTGAGCAGTTTTAG --end_anchor CCCTTTAGTGAGGGT
@@ -381,12 +391,27 @@ python app/run.app --start_anchor GTGAGCAGTTTTAG --end_anchor CCCTTTAGTGAGGGT
 python app/run.app --umi AAACGGTTCCAA
 ```
 
+**Custom assembly parameters:**
+```bash
+python app/run.app --assembly_method compression --min_coverage 10 --kmer_size 15
+```
+
+**Enable auto k-mer size:**
+```bash
+python app/run.app --auto_k
+```
+
 **All options combined:**
 ```bash
 python app/run.app --port 8080 \
+  --file_path /data/experiment1/parsed_reads.parquet \
   --start_anchor GTGAGCAGTTTTAG \
   --end_anchor CCCTTTAGTGAGGGT \
-  --umi AAACGGTTCCAA
+  --umi AAACGGTTCCAA \
+  --assembly_method compression \
+  --min_coverage 8 \
+  --kmer_size 12 \
+  --auto_k
 ```
 
 **View help:**
@@ -397,9 +422,13 @@ python app/run.app --help
 ### Notes
 
 - Command-line arguments set **defaults** in the UI, but users can still change them
+- The `--file_path` option populates the "Local Parquet File" input box and selects "Local File Path" as the input method
 - If a specified UMI doesn't exist in the data, the first available UMI will be selected
+- The `--auto_k` flag overrides the `--kmer_size` parameter when enabled
 - The app logs which values are being used at startup
+- You still need to click "Load Dataset" button after the app starts to actually load the file
 
+---
 ---
 
 ## Workflows

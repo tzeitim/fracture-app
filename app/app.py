@@ -134,7 +134,7 @@ app_ui = ui.page_fluid(
                     )
                 )
             ),
-            ui.nav_panel("Assembly Results",
+            ui.nav_panel("Assembly Settings",
                 ui.row(
                     ui.panel_well(
                         ui.h4("Selection UMI Stats"),
@@ -187,7 +187,7 @@ app_ui = ui.page_fluid(
                 ),
             ),
             id="main_tabs",
-            selected="Assembly Results"  
+            selected="Assembly Settings"
         )
     ),
     ui.output_ui("theme_css"),
@@ -199,10 +199,10 @@ def server(input, output, session):
     os.system("rm -f *__*.dot *__*.csv")
     
     # Debug log for session start
-    logger.debug("New user session started - Assembly Results tab will be selected by default")
-    
-    # Explicitly select the Assembly Results tab on startup
-    ui.update_navs("main_tabs", selected="Assembly Results")
+    logger.debug("New user session started - Assembly Settings tab will be selected by default")
+
+    # Explicitly select the Assembly Settings tab on startup
+    ui.update_navs("main_tabs", selected="Assembly Settings")
 
     # Reactive data storage
     data = reactive.Value(None)
@@ -516,20 +516,34 @@ def server(input, output, session):
         ui.update_text("selected_sequences", value="")
         clicked_nodes.set(set())
         ui.notification_show("Selection cleared!", type="message", duration=2)
-        
+
         # Debug: Log all available inputs to see what selection events exist
         all_inputs = [attr for attr in dir(input) if not attr.startswith('_')]
         selection_inputs = [attr for attr in all_inputs if 'select' in attr.lower() or 'click' in attr.lower()]
         graph_inputs = [attr for attr in all_inputs if 'graph' in attr.lower()]
         logger.info(f"Selection-related inputs: {selection_inputs}")
-        logger.info(f"Graph-related inputs: {graph_inputs}")
-        
-        # Debug: Log available inputs for troubleshooting
-        try:
-            logger.info(f"Total available inputs: {len(all_inputs)}")
-        except Exception as e:
-            logger.info(f"Error in debug section: {e}")
-    
+
+    @reactive.Effect
+    @reactive.event(input.clear_provided_umi)
+    def clear_provided_umi_input():
+        """Clear the Provided UMI text input"""
+        logger.info("Clear Provided UMI button pressed!")
+        ui.update_text("provided_umi", value="")
+
+    @reactive.Effect
+    @reactive.event(input.clear_reference_sequence)
+    def clear_reference_sequence_input():
+        """Clear the Reference Sequence text input"""
+        logger.info("Clear Reference Sequence button pressed!")
+        ui.update_text("reference_sequence", value="")
+
+    @reactive.Effect
+    @reactive.event(input.clear_parquet_file_local)
+    def clear_parquet_file_local_input():
+        """Clear the Local Parquet File text input"""
+        logger.info("Clear Local Parquet File button pressed!")
+        ui.update_text("parquet_file_local", value="")
+
     # Apply Selection button behavior is handled by the graph reactive events
     
     

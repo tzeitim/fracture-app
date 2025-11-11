@@ -27,20 +27,36 @@ def create_data_input_sidebar(db=None, system_prefixes=None, provided_umi_defaul
                 value=True
                 ),
             ui.input_numeric("sample_min_reads", "Minimum number of reads per umi", value=100),
-            ui.input_text("provided_umi", "Provided UMI (optional)", value=provided_umi_default, placeholder="Enter specific UMI to load"),
-            
+            ui.div(
+                ui.input_text("provided_umi", "Provided UMI (optional)", value=provided_umi_default, placeholder="Enter specific UMI to load"),
+                ui.input_action_button(
+                    "clear_provided_umi",
+                    "Clear",
+                    class_="btn-sm btn-outline-secondary",
+                    style="margin-top: 5px; margin-bottom: 10px;"
+                ),
+            ),
+
             # Coverage Plot Controls
             ui.input_checkbox(
                 "enable_coverage_plot",
                 "Enable Coverage Plot",
                 value=True
                 ),
-            ui.input_text(
-                "reference_sequence",
-                "Reference Sequence (optional)",
-                value="",
-                placeholder="Leave empty to use default from mods.parquet"
+            ui.div(
+                ui.input_text(
+                    "reference_sequence",
+                    "Reference Sequence (optional)",
+                    value="",
+                    placeholder="Leave empty to use default from mods.parquet"
+                    ),
+                ui.input_action_button(
+                    "clear_reference_sequence",
+                    "Clear",
+                    class_="btn-sm btn-outline-secondary",
+                    style="margin-top: 5px; margin-bottom: 10px;"
                 ),
+            ),
             #---
             ui.hr(),
             ui.h3("Data Input"),
@@ -77,19 +93,28 @@ def create_data_input_sidebar(db=None, system_prefixes=None, provided_umi_defaul
 
             ui.panel_conditional(
                 "input.input_type === 'local'",
-                ui.input_text("parquet_file_local", "Local Parquet File", value=file_path_default)
+                ui.div(
+                    ui.input_text("parquet_file_local", "Local Parquet File", value=file_path_default),
+                    ui.input_action_button(
+                        "clear_parquet_file_local",
+                        "Clear",
+                        class_="btn-sm btn-outline-secondary",
+                        style="margin-top: 5px;"
+                    ),
+                )
                 ),
         ),
-        ui.nav_panel("Hall of Fame",
-            ui.h4("Famous UMIs"),
-            ui.HTML("GGGCCTGCATCGCACTGTGG google<br>"),
-            ui.HTML("TTTTCCCGACGGCTGATCGG messy<br>"),
-            ui.HTML("AACATGGACGGTACATCGGG great example of horror<br>"),
-            ui.HTML("AACCCCAGAGGCTCAAGTGG full<br>"),
-            ui.HTML("GCTCGTATCCCGAAGCTAGG failed but overlaps<br>"),
-            ui.HTML("GATGCCTACCATCACTGTGG failed but overlaps<br>"),
-            ui.HTML("ATTGGCGGCACACTGTCCTG tricky <br>"),
-        ),
+        # Hall of Fame tab - disabled but preserved for future use
+        # ui.nav_panel("Hall of Fame",
+        #     ui.h4("Famous UMIs"),
+        #     ui.HTML("GGGCCTGCATCGCACTGTGG google<br>"),
+        #     ui.HTML("TTTTCCCGACGGCTGATCGG messy<br>"),
+        #     ui.HTML("AACATGGACGGTACATCGGG great example of horror<br>"),
+        #     ui.HTML("AACCCCAGAGGCTCAAGTGG full<br>"),
+        #     ui.HTML("GCTCGTATCCCGAAGCTAGG failed but overlaps<br>"),
+        #     ui.HTML("GATGCCTACCATCACTGTGG failed but overlaps<br>"),
+        #     ui.HTML("ATTGGCGGCACACTGTCCTG tricky <br>"),
+        # ),
         ui.nav_panel("Graph",
             create_graph_source_controls(),
             create_node_selection_controls(),
@@ -167,15 +192,15 @@ def create_graph_source_controls():
             "layout_algorithm",
             "Layout Algorithm:",
             choices={
-                "fruchterman_reingold": "Fruchterman-Reingold (Balanced - Recommended)",
+                "kamada_kawai": "Kamada-Kawai (Best quality - Recommended)",
+                "fruchterman_reingold": "Fruchterman-Reingold (Balanced)",
                 "spectral": "Spectral (Fast for large graphs)",
-                "random": "Random (Fastest)",
+                "spring": "Spring (High quality, slow)",
                 "circular": "Circular (Very fast)",
                 "shell": "Shell (Fast, concentric)",
-                "spring": "Spring (High quality, slow)",
-                "kamada_kawai": "Kamada-Kawai (Best quality, slowest)"
+                "random": "Random (Fastest)"
             },
-            selected="fruchterman_reingold"
+            selected="kamada_kawai"
         ),
         
         # Show assembly controls when "assembly" is selected
@@ -374,14 +399,14 @@ def create_node_selection_controls():
     return ui.panel_well(
         ui.h4("Node Selection"),
         ui.p("Click nodes in the graph or enter IDs/sequences below"),
-        
+
         ui.input_text(
             "selected_nodes",
             "Node IDs (comma-separated):",
             value="",
             placeholder="e.g., n0, n1, n597"
         ),
-        
+
         ui.input_text(
             "selected_sequences",
             "Sequences (comma-separated):",
